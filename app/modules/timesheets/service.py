@@ -41,10 +41,12 @@ class TimesheetService:
                     detail="Specified project is invalid or inactive.",
                 )
 
-        existing_hours = await self._timesheet_repo.get_user_daily_logged_hours(
-            user_id=user_id, target_date=payload.work_date
+        existing_hours = float(
+            await self._timesheet_repo.get_user_daily_logged_hours(
+                user_id=user_id, target_date=payload.work_date, for_update=True
+            )
         )
-        if existing_hours + payload.hours_spent > 24.0:
+        if existing_hours + float(payload.hours_spent) > 24.0:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Total hours logged for {payload.work_date} would exceed 24 hours. (Already logged: {existing_hours} hrs)",
@@ -113,10 +115,15 @@ class TimesheetService:
         target_date = update_fields.get("work_date", entry.work_date)
         target_hours = update_fields.get("hours_spent", entry.hours_spent)
 
-        existing_hours = await self._timesheet_repo.get_user_daily_logged_hours(
-            user_id=user_id, target_date=target_date, exclude_entry_id=entry.id
+        existing_hours = float(
+            await self._timesheet_repo.get_user_daily_logged_hours(
+                user_id=user_id,
+                target_date=target_date,
+                exclude_entry_id=entry.id,
+                for_update=True,
+            )
         )
-        if existing_hours + target_hours > 24.0:
+        if existing_hours + float(target_hours) > 24.0:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Total hours logged for {target_date} would exceed 24 hours.",
@@ -241,9 +248,26 @@ class TimesheetService:
                 detail=f"Timesheet entry with ID '{entry_id}' not found.",
             )
 
-        await self._timesheet_repo.update(
-            entry, {"status": payload.status, "approver_id": approver_id}
-        )
+        if entry.status != "submitted":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Only submitted timesheet entries can be approved or rejected. Current status is '{entry.status}'.",
+            )
+
+        if payload.status not in ("approved", "rejected"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Target status must be 'approved' or 'rejected'. Received '{payload.status}'.",
+            )
+
+        update_data = {
+            "status": payload.status,
+            "approver_id": approver_id,
+            "rejection_reason": payload.rejection_reason
+            if payload.status == "rejected"
+            else None,
+        }
+        await self._timesheet_repo.update(entry, update_data)
 
         audit_entry = AuditLog(
             user_id=approver_id,
@@ -251,7 +275,10 @@ class TimesheetService:
             module=AuditModule.TIMESHEETS.value,
             entity=AuditEntity.TIMESHEET.value,
             entity_id=entry.id,
-            extra_metadata={"new_status": payload.status},
+            extra_metadata={
+                "new_status": payload.status,
+                "rejection_reason": payload.rejection_reason,
+            },
         )
         await self._audit_repo.create_log(audit_entry)
 

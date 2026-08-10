@@ -42,6 +42,7 @@ class TimesheetEntryRead(BaseModel):
     activity_summary: str
     status: str
     approver_id: Optional[uuid.UUID] = None
+    rejection_reason: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

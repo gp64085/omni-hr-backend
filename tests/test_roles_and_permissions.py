@@ -38,58 +38,63 @@ async def override_get_db():
 @pytest_asyncio.fixture(autouse=True)
 async def setup_roles_test_db():
     app.dependency_overrides[get_db] = override_get_db
-    async with test_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with test_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
 
-    async with TestingSessionLocal() as session:
-        perm_read = Permission(
-            code="payroll:read", module="payroll", description="Read payroll"
-        )
-        perm_process = Permission(
-            code="payroll:process", module="payroll", description="Process payroll"
-        )
-        session.add_all([perm_read, perm_process])
-        await session.flush()
+        async with TestingSessionLocal() as session:
+            perm_read = Permission(
+                code="payroll:read", module="payroll", description="Read payroll"
+            )
+            perm_process = Permission(
+                code="payroll:process", module="payroll", description="Process payroll"
+            )
+            perm_roles = Permission(
+                code="roles:write", module="roles", description="Manage roles"
+            )
+            session.add_all([perm_read, perm_process, perm_roles])
+            await session.flush()
 
-        admin_role = Role(
-            name=UserRole.SUPER_ADMIN.value,
-            description="Super Administrator",
-            is_system=True,
-            permissions=[perm_read, perm_process],
-        )
-        emp_role = Role(
-            name=UserRole.EMPLOYEE.value,
-            description="Standard Employee",
-            is_system=True,
-            permissions=[perm_read],
-        )
-        session.add_all([admin_role, emp_role])
-        await session.flush()
+            admin_role = Role(
+                name="super_admin",
+                description="Super Admin Role",
+                is_system=True,
+                permissions=[perm_read, perm_process, perm_roles],
+            )
+            emp_role = Role(
+                name="employee",
+                description="Employee Role",
+                permissions=[],
+            )
+            session.add_all([admin_role, emp_role])
+            await session.flush()
 
-        admin_user = User(
-            email="admin@omnihr.com",
-            password_hash=get_password_hash("AdminPass123!"),
-            first_name="Admin",
-            last_name="System",
-            role_id=admin_role.id,
-            is_active=True,
-        )
-        emp_user = User(
-            email="employee@omnihr.com",
-            password_hash=get_password_hash("EmpPass123!"),
-            first_name="Employee",
-            last_name="User",
-            role_id=emp_role.id,
-            is_active=True,
-        )
-        session.add_all([admin_user, emp_user])
-        await session.commit()
+            admin_user = User(
+                email="admin@omnihr.com",
+                password_hash=get_password_hash("AdminPass123!"),
+                first_name="Admin",
+                last_name="System",
+                role_id=admin_role.id,
+                is_active=True,
+            )
+            emp_user = User(
+                email="employee@omnihr.com",
+                password_hash=get_password_hash("EmpPass123!"),
+                first_name="Employee",
+                last_name="User",
+                role_id=emp_role.id,
+                is_active=True,
+            )
+            session.add_all([admin_user, emp_user])
+            await session.commit()
 
-    yield
-
-    async with test_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-    app.dependency_overrides.clear()
+        yield
+    finally:
+        try:
+            async with test_engine.begin() as conn:
+                await conn.run_sync(Base.metadata.drop_all)
+        finally:
+            app.dependency_overrides.pop(get_db, None)
 
 
 @pytest.mark.asyncio

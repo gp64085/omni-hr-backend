@@ -31,6 +31,13 @@ class ProjectService:
                 detail=f"Project with code '{payload.code}' already exists.",
             )
 
+        existing_name = await self._project_repo.get_by_name(payload.name)
+        if existing_name:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Project with name '{payload.name}' already exists.",
+            )
+
         departments = []
         if payload.department_ids:
             departments = list(
@@ -106,6 +113,14 @@ class ProjectService:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"Project with code '{update_fields['code']}' already exists.",
+                )
+
+        if "name" in update_fields and update_fields["name"] != project.name:
+            existing = await self._project_repo.get_by_name(update_fields["name"])
+            if existing and existing.id != project_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Project with name '{update_fields['name']}' already exists.",
                 )
 
         updated_project = await self._project_repo.update(project, update_fields)

@@ -6,7 +6,6 @@ from fastapi import Depends, Query, Request, status
 from app.api.deps import (
     ProtectedAPIRouter,
     get_cache_service,
-    get_current_user,
     get_project_service,
     require_permission,
 )
@@ -50,7 +49,7 @@ async def create_project(
 async def list_projects(
     request: Request,
     department_id: Optional[uuid.UUID] = Query(None),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission(PermissionEnum.PROJECTS_READ)),
     project_service: ProjectService = Depends(get_project_service),
 ):
     projects = await project_service.list_projects(department_id=department_id)
@@ -64,7 +63,7 @@ async def list_projects(
 )
 async def get_project(
     project_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission(PermissionEnum.PROJECTS_READ)),
     project_service: ProjectService = Depends(get_project_service),
 ):
     project = await project_service.get_project_by_id(project_id)

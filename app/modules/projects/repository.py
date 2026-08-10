@@ -30,6 +30,14 @@ class ProjectRepository(BaseRepository[Project]):
         )
         return query_result.scalar_one_or_none()
 
+    async def get_by_name(self, name: str) -> Optional[Project]:
+        query_result = await self._database_session.execute(
+            select(Project)
+            .options(selectinload(Project.departments))
+            .where(Project.name == name)
+        )
+        return query_result.scalar_one_or_none()
+
     async def list_active_projects(
         self, department_id: Optional[uuid.UUID] = None
     ) -> Sequence[Project]:

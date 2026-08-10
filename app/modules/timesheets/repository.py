@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.timesheet import TimesheetEntry
+from app.models.user import User
 from app.repositories.base import BaseRepository
 
 
@@ -59,7 +60,13 @@ class TimesheetRepository(BaseRepository[TimesheetEntry]):
         user_id: uuid.UUID,
         target_date: date,
         exclude_entry_id: Optional[uuid.UUID] = None,
+        for_update: bool = False,
     ) -> float:
+        if for_update:
+            await self._database_session.execute(
+                select(User.id).where(User.id == user_id).with_for_update()
+            )
+
         query = select(func.coalesce(func.sum(TimesheetEntry.hours_spent), 0)).where(
             TimesheetEntry.user_id == user_id,
             TimesheetEntry.work_date == target_date,
@@ -69,7 +76,7 @@ class TimesheetRepository(BaseRepository[TimesheetEntry]):
 
         query_result = await self._database_session.execute(query)
         total_hours = query_result.scalar()
-        return total_hours or 0.0
+        return float(total_hours or 0.0)
 
     async def bulk_update_status(
         self,

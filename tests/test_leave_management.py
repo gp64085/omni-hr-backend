@@ -41,83 +41,87 @@ async def override_get_db():
 @pytest_asyncio.fixture(autouse=True)
 async def setup_test_db():
     app.dependency_overrides[get_db] = override_get_db
-    async with test_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with test_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
 
-    async with TestingSessionLocal() as session:
-        # Seed Permissions
-        p_apply = Permission(code=PermissionEnum.LEAVE_APPLY.value, module="leaves")
-        p_read = Permission(code=PermissionEnum.LEAVE_READ.value, module="leaves")
-        p_approve = Permission(code=PermissionEnum.LEAVE_APPROVE.value, module="leaves")
-        p_manage = Permission(
-            code=PermissionEnum.LEAVE_MANAGE_TYPES.value, module="leaves"
-        )
-        session.add_all([p_apply, p_read, p_approve, p_manage])
-        await session.flush()
+        async with TestingSessionLocal() as session:
+            # Seed Permissions
+            p_apply = Permission(code=PermissionEnum.LEAVE_APPLY.value, module="leaves")
+            p_read = Permission(code=PermissionEnum.LEAVE_READ.value, module="leaves")
+            p_approve = Permission(
+                code=PermissionEnum.LEAVE_APPROVE.value, module="leaves"
+            )
+            p_manage = Permission(
+                code=PermissionEnum.LEAVE_MANAGE_TYPES.value, module="leaves"
+            )
+            session.add_all([p_apply, p_read, p_approve, p_manage])
+            await session.flush()
 
-        # Seed System Roles with permissions
-        admin_role = Role(
-            name=UserRole.SUPER_ADMIN.value,
-            description="Super Admin",
-            is_system=True,
-            permissions=[p_apply, p_read, p_approve, p_manage],
-        )
-        emp_role = Role(
-            name=UserRole.EMPLOYEE.value,
-            description="Employee",
-            is_system=True,
-            permissions=[p_apply, p_read],
-        )
-        session.add_all([admin_role, emp_role])
-        await session.flush()
+            # Seed System Roles with permissions
+            admin_role = Role(
+                name=UserRole.SUPER_ADMIN.value,
+                description="Super Admin",
+                is_system=True,
+                permissions=[p_apply, p_read, p_approve, p_manage],
+            )
+            emp_role = Role(
+                name=UserRole.EMPLOYEE.value,
+                description="Employee",
+                is_system=True,
+                permissions=[p_apply, p_read],
+            )
+            session.add_all([admin_role, emp_role])
+            await session.flush()
 
-        # Seed Users
-        admin = User(
-            email="admin_leave@omnihr.com",
-            password_hash=get_password_hash("TestPass123!"),
-            first_name="Admin",
-            last_name="Leave",
-            role_id=admin_role.id,
-            is_active=True,
-        )
-        emp = User(
-            email="emp_leave@omnihr.com",
-            password_hash=get_password_hash("EmpPass123!"),
-            first_name="Employee",
-            last_name="Leave",
-            role_id=emp_role.id,
-            is_active=True,
-        )
-        session.add_all([admin, emp])
-        await session.flush()
+            admin = User(
+                email="admin_leave@omnihr.com",
+                password_hash=get_password_hash("TestPass123!"),
+                first_name="Admin",
+                last_name="Tester",
+                role_id=admin_role.id,
+                is_active=True,
+            )
+            emp = User(
+                email="emp_leave@omnihr.com",
+                password_hash=get_password_hash("EmpPass123!"),
+                first_name="Employee",
+                last_name="Tester",
+                role_id=emp_role.id,
+                is_active=True,
+            )
+            session.add_all([admin, emp])
+            await session.flush()
 
-        # Seed Leave Types
-        lt_casual = LeaveType(
-            name=LeaveTypeEnum.CASUAL,
-            default_quota=12.0,
-            requires_approval=True,
-            auto_approve_threshold=0,
-        )
-        lt_sick = LeaveType(
-            name=LeaveTypeEnum.SICK,
-            default_quota=10.0,
-            requires_approval=True,
-            auto_approve_threshold=1,
-        )
-        lt_unpaid = LeaveType(
-            name=LeaveTypeEnum.UNPAID,
-            default_quota=0.0,
-            requires_approval=True,
-            auto_approve_threshold=0,
-        )
-        session.add_all([lt_casual, lt_sick, lt_unpaid])
-        await session.commit()
+            # Seed Leave Types
+            lt_casual = LeaveType(
+                name=LeaveTypeEnum.CASUAL,
+                default_quota=12.0,
+                requires_approval=True,
+                auto_approve_threshold=0,
+            )
+            lt_sick = LeaveType(
+                name=LeaveTypeEnum.SICK,
+                default_quota=10.0,
+                requires_approval=True,
+                auto_approve_threshold=1,
+            )
+            lt_unpaid = LeaveType(
+                name=LeaveTypeEnum.UNPAID,
+                default_quota=0.0,
+                requires_approval=True,
+                auto_approve_threshold=0,
+            )
+            session.add_all([lt_casual, lt_sick, lt_unpaid])
+            await session.commit()
 
-    yield
-
-    async with test_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-    app.dependency_overrides.clear()
+        yield
+    finally:
+        try:
+            async with test_engine.begin() as conn:
+                await conn.run_sync(Base.metadata.drop_all)
+        finally:
+            app.dependency_overrides.pop(get_db, None)
 
 
 @pytest.mark.asyncio
