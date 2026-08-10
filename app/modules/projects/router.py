@@ -54,7 +54,9 @@ async def list_projects(
     current_user: User = Depends(require_permission(PermissionEnum.PROJECTS_READ)),
     project_service: ProjectService = Depends(get_project_service),
 ):
-    projects = await project_service.list_projects(department_id=department_id)
+    projects = await project_service.list_projects(
+        department_id=department_id, user_id=current_user.id
+    )
     return StandardResponse.ok(data=projects)
 
 
@@ -70,7 +72,9 @@ async def get_project(
     current_user: User = Depends(require_permission(PermissionEnum.PROJECTS_READ)),
     project_service: ProjectService = Depends(get_project_service),
 ):
-    project = await project_service.get_project_by_id(project_id)
+    project = await project_service.get_project_by_id(
+        project_id, user_id=current_user.id
+    )
     return StandardResponse.ok(data=project)
 
 

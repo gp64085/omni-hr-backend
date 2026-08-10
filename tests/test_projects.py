@@ -3,12 +3,15 @@ import uuid
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.core.security import get_password_hash
 from app.db.session import Base, get_db
 from app.main import app
+from app.models.audit import AuditLog
+from app.models.organization import Department
 from app.models.role import Permission, PermissionEnum, Role
 from app.models.user import User
 
@@ -298,3 +301,67 @@ async def test_list_projects_department_filtering():
         projs_d2 = res_filter_dept2.json()["data"]
         assert len(projs_d2) == 1
         assert projs_d2[0]["code"] == "D2-PROJ"
+
+
+@pytest.mark.asyncio
+async def test_project_audit_log_actor_attribution_and_department_updates():
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        admin_login = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "admin@omni-hr.com", "password": "Password123!"},
+        )
+        assert admin_login.status_code == 200
+        admin_headers = {
+            "Authorization": f"Bearer {admin_login.json()['data']['access_token']}"
+        }
+
+        # 1. Create a project
+        res_create = await client.post(
+            "/api/v1/projects",
+            json={"name": "Audit Test Project", "code": "AUD-01", "department_ids": []},
+            headers=admin_headers,
+        )
+        assert res_create.status_code == 201
+        project_id = res_create.json()["data"]["id"]
+
+        # 2. Get project by ID (triggers PROJECT_READ audit log)
+        res_get = await client.get(
+            f"/api/v1/projects/{project_id}", headers=admin_headers
+        )
+        assert res_get.status_code == 200
+
+        # 3. Department-only update
+        dept_id = uuid.uuid4()
+        async with TestingSessionLocal() as session:
+            dept = Department(id=dept_id, name="Audit Dept")
+            session.add(dept)
+            await session.commit()
+
+        res_update = await client.put(
+            f"/api/v1/projects/{project_id}",
+            json={"department_ids": [str(dept_id)]},
+            headers=admin_headers,
+        )
+        assert res_update.status_code == 200
+
+        # 4. Verify audit log records in DB
+        async with TestingSessionLocal() as session:
+            result = await session.execute(
+                select(AuditLog).order_by(AuditLog.created_at.asc())
+            )
+            logs = result.scalars().all()
+
+            # Check read log
+            read_logs = [entry for entry in logs if entry.action == "PROJECT_READ"]
+            assert len(read_logs) > 0
+            for r_log in read_logs:
+                assert r_log.user_id is not None
+
+            # Check update log
+            update_logs = [entry for entry in logs if entry.action == "PROJECT_UPDATE"]
+            assert len(update_logs) > 0
+            last_update = update_logs[-1]
+            assert "department_ids" in last_update.extra_metadata["updated_fields"]
+            assert last_update.extra_metadata["department_ids"] == [str(dept_id)]

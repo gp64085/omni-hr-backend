@@ -1,5 +1,5 @@
 import uuid
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import HTTPException, status
 
@@ -72,15 +72,18 @@ class ProjectService:
         return ProjectRead.model_validate(created_project)
 
     async def list_projects(
-        self, department_id: Optional[uuid.UUID] = None
+        self,
+        department_id: Optional[uuid.UUID] = None,
+        user_id: Optional[uuid.UUID] = None,
     ) -> list[ProjectRead]:
         projects = await self._project_repo.list_active_projects(department_id)
 
         await self._audit_repo.create_log(
             AuditLog(
-                action=AuditAction.PROJECT_READ,
-                module=AuditModule.TIMESHEETS,
-                entity=AuditEntity.PROJECT,
+                user_id=user_id,
+                action=AuditAction.PROJECT_READ.value,
+                module=AuditModule.TIMESHEETS.value,
+                entity=AuditEntity.PROJECT.value,
                 entity_id=None,
                 extra_metadata={
                     "department_id": str(department_id) if department_id else None
@@ -89,7 +92,9 @@ class ProjectService:
         )
         return [ProjectRead.model_validate(p) for p in projects]
 
-    async def get_project_by_id(self, project_id: uuid.UUID) -> ProjectRead:
+    async def get_project_by_id(
+        self, project_id: uuid.UUID, user_id: Optional[uuid.UUID] = None
+    ) -> ProjectRead:
         project = await self._project_repo.get_by_id(project_id)
         if not project:
             raise HTTPException(
@@ -99,9 +104,10 @@ class ProjectService:
 
         await self._audit_repo.create_log(
             AuditLog(
-                action=AuditAction.PROJECT_READ,
-                module=AuditModule.TIMESHEETS,
-                entity=AuditEntity.PROJECT,
+                user_id=user_id,
+                action=AuditAction.PROJECT_READ.value,
+                module=AuditModule.TIMESHEETS.value,
+                entity=AuditEntity.PROJECT.value,
                 entity_id=project.id,
                 extra_metadata={"name": project.name, "code": project.code},
             )
@@ -122,7 +128,10 @@ class ProjectService:
             )
 
         update_fields = payload.model_dump(exclude_unset=True)
-        if "department_ids" in update_fields:
+        department_ids_supplied = "department_ids" in update_fields
+        dept_ids = None
+
+        if department_ids_supplied:
             dept_ids = update_fields.pop("department_ids")
             if dept_ids is not None:
                 departments = list(
@@ -153,13 +162,21 @@ class ProjectService:
 
         updated_project = await self._project_repo.update(project, update_fields)
 
+        changed_fields = list(update_fields.keys())
+        if department_ids_supplied:
+            changed_fields.append("department_ids")
+
+        extra_meta: dict[str, Any] = {"updated_fields": changed_fields}
+        if department_ids_supplied and dept_ids is not None:
+            extra_meta["department_ids"] = [str(d) for d in dept_ids]
+
         audit_entry = AuditLog(
             user_id=user_id,
             action=AuditAction.PROJECT_UPDATE.value,
             module=AuditModule.TIMESHEETS.value,
             entity=AuditEntity.PROJECT.value,
             entity_id=updated_project.id,
-            extra_metadata={"updated_fields": list(update_fields.keys())},
+            extra_metadata=extra_meta,
         )
         await self._audit_repo.create_log(audit_entry)
 
