@@ -229,3 +229,72 @@ async def test_duplicate_project_name_validation():
             headers=admin_headers,
         )
         assert res_update_dup.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_list_projects_department_filtering():
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        from app.models.organization import Department
+
+        dept1_id = uuid.uuid4()
+        dept2_id = uuid.uuid4()
+
+        async with TestingSessionLocal() as session:
+            dept1 = Department(id=dept1_id, name="Eng Dept")
+            dept2 = Department(id=dept2_id, name="Sales Dept")
+            session.add_all([dept1, dept2])
+            await session.commit()
+
+        admin_login = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "admin@omni-hr.com", "password": "Password123!"},
+        )
+        admin_headers = {
+            "Authorization": f"Bearer {admin_login.json()['data']['access_token']}"
+        }
+
+        # Create Project 1 linked to Dept 1
+        res1 = await client.post(
+            "/api/v1/projects",
+            json={
+                "name": "Dept 1 Proj",
+                "code": "D1-PROJ",
+                "department_ids": [str(dept1_id)],
+            },
+            headers=admin_headers,
+        )
+        assert res1.status_code == 201
+
+        # Create Project 2 linked to Dept 2
+        res2 = await client.post(
+            "/api/v1/projects",
+            json={
+                "name": "Dept 2 Proj",
+                "code": "D2-PROJ",
+                "department_ids": [str(dept2_id)],
+            },
+            headers=admin_headers,
+        )
+        assert res2.status_code == 201
+
+        # Filter by Dept 1 -> should return only Dept 1 Proj
+        res_filter_dept1 = await client.get(
+            f"/api/v1/projects?department_id={dept1_id}",
+            headers=admin_headers,
+        )
+        assert res_filter_dept1.status_code == 200
+        projs_d1 = res_filter_dept1.json()["data"]
+        assert len(projs_d1) == 1
+        assert projs_d1[0]["code"] == "D1-PROJ"
+
+        # Filter by Dept 2 -> should return only Dept 2 Proj
+        res_filter_dept2 = await client.get(
+            f"/api/v1/projects?department_id={dept2_id}",
+            headers=admin_headers,
+        )
+        assert res_filter_dept2.status_code == 200
+        projs_d2 = res_filter_dept2.json()["data"]
+        assert len(projs_d2) == 1
+        assert projs_d2[0]["code"] == "D2-PROJ"

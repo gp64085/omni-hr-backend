@@ -6,11 +6,13 @@ from fastapi import Depends, Query, Request, status
 from app.api.deps import (
     ProtectedAPIRouter,
     get_cache_service,
+    get_current_user,
     get_role_service,
     require_permission,
 )
 from app.core.services.cache_service import CacheService, cache_response
 from app.models.role import PermissionEnum
+from app.models.user import User
 from app.modules.roles.schemas import (
     PermissionCreate,
     PermissionRead,
@@ -99,7 +101,7 @@ async def create_permission(
     cache_service: CacheService = Depends(get_cache_service),
 ) -> PermissionRead:
     created_permission = await role_service.create_permission(perm_in)
-    await cache_service.invalidate_prefix("permissions")
+    await cache_service.invalidate_prefixes("permissions_list", "permissions")
     return PermissionRead.model_validate(created_permission)
 
 
@@ -112,11 +114,12 @@ async def create_permission(
 )
 async def create_role(
     role_in: RoleCreate,
+    current_user: User = Depends(get_current_user),
     role_service: RoleService = Depends(get_role_service),
     cache_service: CacheService = Depends(get_cache_service),
 ) -> RoleWithPermissionsRead:
-    created_role = await role_service.create_role(role_in)
-    await cache_service.invalidate_prefix("roles")
+    created_role = await role_service.create_role(role_in, user_id=current_user.id)
+    await cache_service.invalidate_prefixes("roles_list", "roles")
     return RoleWithPermissionsRead.model_validate(created_role)
 
 
@@ -145,11 +148,14 @@ async def get_role(
 async def update_role(
     role_id: uuid.UUID,
     role_in: RoleUpdate,
+    current_user: User = Depends(get_current_user),
     role_service: RoleService = Depends(get_role_service),
     cache_service: CacheService = Depends(get_cache_service),
 ) -> RoleWithPermissionsRead:
-    updated_role = await role_service.update_role(role_id, role_in)
-    await cache_service.invalidate_prefix("roles")
+    updated_role = await role_service.update_role(
+        role_id, role_in, user_id=current_user.id
+    )
+    await cache_service.invalidate_prefixes("roles_list", "roles", "role_permissions")
     return RoleWithPermissionsRead.model_validate(updated_role)
 
 
@@ -161,8 +167,9 @@ async def update_role(
 )
 async def delete_role(
     role_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
     role_service: RoleService = Depends(get_role_service),
     cache_service: CacheService = Depends(get_cache_service),
 ) -> None:
-    await role_service.delete_role(role_id)
-    await cache_service.invalidate_prefix("roles")
+    await role_service.delete_role(role_id, user_id=current_user.id)
+    await cache_service.invalidate_prefixes("roles_list", "roles", "role_permissions")

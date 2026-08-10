@@ -94,7 +94,9 @@ class RoleService:
             )
         return role
 
-    async def create_role(self, role_in: RoleCreate) -> Role:
+    async def create_role(
+        self, role_in: RoleCreate, user_id: Optional[uuid.UUID] = None
+    ) -> Role:
         existing_role = await self._role_repo.get_by_name(role_in.name)
         if existing_role:
             raise HTTPException(
@@ -118,6 +120,7 @@ class RoleService:
 
         if self._audit_repo:
             audit = AuditLog(
+                user_id=user_id,
                 module=AuditModule.ROLES.value,
                 action=AuditAction.ROLE_CREATE.value,
                 entity=AuditEntity.ROLE.value,
@@ -128,7 +131,12 @@ class RoleService:
 
         return created_role
 
-    async def update_role(self, role_id: uuid.UUID, role_in: RoleUpdate) -> Role:
+    async def update_role(
+        self,
+        role_id: uuid.UUID,
+        role_in: RoleUpdate,
+        user_id: Optional[uuid.UUID] = None,
+    ) -> Role:
         role = await self.get_role(role_id)
 
         if role_in.name and role_in.name != role.name:
@@ -164,6 +172,7 @@ class RoleService:
 
         if self._audit_repo:
             audit = AuditLog(
+                user_id=user_id,
                 module=AuditModule.ROLES.value,
                 action=AuditAction.ROLE_UPDATE.value,
                 entity=AuditEntity.ROLE.value,
@@ -174,7 +183,9 @@ class RoleService:
 
         return updated_role
 
-    async def delete_role(self, role_id: uuid.UUID) -> None:
+    async def delete_role(
+        self, role_id: uuid.UUID, user_id: Optional[uuid.UUID] = None
+    ) -> None:
         role = await self.get_role(role_id)
         if role.is_system:
             raise HTTPException(
@@ -199,6 +210,7 @@ class RoleService:
 
         if self._audit_repo:
             audit = AuditLog(
+                user_id=user_id,
                 module=AuditModule.ROLES.value,
                 action=AuditAction.ROLE_DELETE.value,
                 entity=AuditEntity.ROLE.value,
