@@ -82,7 +82,9 @@ class LeaveService:
                     user_id=user_id,
                     leave_type_id=lt.id,
                     year=year,
-                    allocated_days=lt.default_quota or 0,
+                    allocated_days=float(lt.default_quota)
+                    if lt.default_quota is not None
+                    else 0.0,
                     used_days=0.0,
                     comp_off_credits=0.0,
                 )
@@ -97,9 +99,9 @@ class LeaveService:
 
             alloc_entity = existing_type_map[lt.id]
             alloc_dict = LeaveAllocationRead.model_validate(alloc_entity)
-            alloc_dict.remaining_days = (
+            alloc_dict.remaining_days = float(
                 alloc_entity.allocated_days + alloc_entity.comp_off_credits
-            ) - alloc_entity.used_days
+            ) - float(alloc_entity.used_days)
             result_allocations.append(alloc_dict)
 
         return result_allocations
@@ -206,7 +208,7 @@ class LeaveService:
                 user_id, payload.leave_type_id, payload.start_date.year
             )
             if alloc:
-                alloc.used_days = alloc.used_days + total_working_days
+                alloc.used_days = float(alloc.used_days) + float(total_working_days)
                 await self._leave_repo.save_allocation(alloc)
 
         created_details = await self._leave_repo.get_leave_request_with_details(
@@ -513,7 +515,7 @@ class LeaveService:
                 comp_off_credits=0.0,
             )
         else:
-            alloc.allocated_days = alloc.allocated_days + payload.granted_days
+            alloc.allocated_days = float(alloc.allocated_days) + float(payload.granted_days)
 
         await self._leave_repo.save_allocation(alloc)
         saved = await self._leave_repo.get_allocation_for_type(
@@ -528,10 +530,10 @@ class LeaveService:
             entity=AuditEntity.LEAVE_ALLOCATION.value,
             entity_id=saved.id if saved else None,
             extra_metadata={
-                "granted_days": payload.granted_days,
+                "granted_days": float(payload.granted_days),
                 "reason": payload.reason,
                 "year": payload.year,
-                "new_allocated_days": saved.allocated_days if saved else None,
+                "new_allocated_days": float(saved.allocated_days) if saved else None,
             },
         )
         await self._audit_repo.create_log(audit_entry)
@@ -539,9 +541,9 @@ class LeaveService:
         alloc_read = LeaveAllocationRead.model_validate(saved)
 
         if saved:
-            alloc_read.remaining_days = (
+            alloc_read.remaining_days = float(
                 saved.allocated_days + saved.comp_off_credits
-            ) - saved.used_days
+            ) - float(saved.used_days)
 
         return alloc_read
 

@@ -3,6 +3,7 @@ from datetime import date
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -335,3 +336,175 @@ async def test_timesheet_visibility_policy_for_user_id():
         entries_admin_query = res_admin_query.json()["data"]
         assert len(entries_admin_query) == 1
         assert entries_admin_query[0]["hours_spent"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_department_lead_and_users_read_visibility_isolation():
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        import uuid
+
+        from app.models.organization import Department
+
+        dept1_id = uuid.uuid4()
+        dept2_id = uuid.uuid4()
+
+        async with TestingSessionLocal() as session:
+            # Seed Departments
+            dept1 = Department(id=dept1_id, name="Engineering")
+            dept2 = Department(id=dept2_id, name="Marketing")
+            session.add_all([dept1, dept2])
+
+            # Fetch existing submit permission and seed USERS_READ
+            res_submit = await session.execute(
+                select(Permission).where(
+                    Permission.code == PermissionEnum.TIMESHEET_SUBMIT.value
+                )
+            )
+            p_submit = res_submit.scalar_one()
+
+            p_users_read = Permission(
+                code=PermissionEnum.USERS_READ.value, module="users"
+            )
+            session.add(p_users_read)
+            await session.flush()
+
+            # Seed Roles
+            users_reader_role = Role(
+                name="UsersReader",
+                description="Role with users:read permission",
+                permissions=[p_users_read, p_submit],
+            )
+            dept_lead_role = Role(
+                name=UserRole.DEPARTMENT_LEAD.value,
+                description="Department Lead Role",
+                permissions=[p_submit],
+            )
+            emp_role = Role(
+                name="StandardEmp",
+                description="Standard Employee Role",
+                permissions=[p_submit],
+            )
+            session.add_all([users_reader_role, dept_lead_role, emp_role])
+            await session.flush()
+
+            pwd = get_password_hash("Password123!")
+
+            # User 1: Has USERS_READ permission (in Dept 1)
+            u_reader = User(
+                email="reader@omni-hr.com",
+                password_hash=pwd,
+                first_name="User",
+                last_name="Reader",
+                role_id=users_reader_role.id,
+                department_id=dept1_id,
+                is_active=True,
+            )
+            # User 2: Department Lead of Dept 1
+            u_lead = User(
+                email="lead@omni-hr.com",
+                password_hash=pwd,
+                first_name="Lead",
+                last_name="User",
+                role_id=dept_lead_role.id,
+                department_id=dept1_id,
+                is_active=True,
+            )
+            # User 3: Employee in Dept 1 (same as Lead)
+            u_emp_dept1 = User(
+                email="emp1@omni-hr.com",
+                password_hash=pwd,
+                first_name="Emp",
+                last_name="One",
+                role_id=emp_role.id,
+                department_id=dept1_id,
+                is_active=True,
+            )
+            # User 4: Employee in Dept 2 (different dept)
+            u_emp_dept2 = User(
+                email="emp2@omni-hr.com",
+                password_hash=pwd,
+                first_name="Emp",
+                last_name="Two",
+                role_id=emp_role.id,
+                department_id=dept2_id,
+                is_active=True,
+            )
+            session.add_all([u_reader, u_lead, u_emp_dept1, u_emp_dept2])
+            await session.commit()
+
+            emp1_id = u_emp_dept1.id
+            emp2_id = u_emp_dept2.id
+
+        today_str = str(date.today())
+
+        # Log entry for Emp 1 (dept 1)
+        login_e1 = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "emp1@omni-hr.com", "password": "Password123!"},
+        )
+        h_e1 = {"Authorization": f"Bearer {login_e1.json()['data']['access_token']}"}
+        await client.post(
+            "/api/v1/timesheets/entries",
+            json={
+                "work_date": today_str,
+                "hours_spent": 4.0,
+                "is_billable": True,
+                "activity_summary": "Task E1",
+            },
+            headers=h_e1,
+        )
+
+        # Log entry for Emp 2 (dept 2)
+        login_e2 = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "emp2@omni-hr.com", "password": "Password123!"},
+        )
+        h_e2 = {"Authorization": f"Bearer {login_e2.json()['data']['access_token']}"}
+        await client.post(
+            "/api/v1/timesheets/entries",
+            json={
+                "work_date": today_str,
+                "hours_spent": 6.0,
+                "is_billable": True,
+                "activity_summary": "Task E2",
+            },
+            headers=h_e2,
+        )
+
+        # 1. User with USERS_READ attempts to access Emp 1's timesheets -> DENIED (returns own 0 entries)
+        login_reader = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "reader@omni-hr.com", "password": "Password123!"},
+        )
+        h_reader = {
+            "Authorization": f"Bearer {login_reader.json()['data']['access_token']}"
+        }
+        res_reader_peek = await client.get(
+            f"/api/v1/timesheets/entries?user_id={emp1_id}", headers=h_reader
+        )
+        assert res_reader_peek.status_code == 200
+        assert len(res_reader_peek.json()["data"]) == 0
+
+        # 2. Dept Lead attempts to access Emp 1 (same dept) -> ALLOWED (returns Emp 1's entry)
+        login_lead = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "lead@omni-hr.com", "password": "Password123!"},
+        )
+        h_lead = {
+            "Authorization": f"Bearer {login_lead.json()['data']['access_token']}"
+        }
+        res_lead_same = await client.get(
+            f"/api/v1/timesheets/entries?user_id={emp1_id}", headers=h_lead
+        )
+        assert res_lead_same.status_code == 200
+        assert len(res_lead_same.json()["data"]) == 1
+        assert res_lead_same.json()["data"][0]["hours_spent"] == 4.0
+
+        # 3. Dept Lead attempts to access Emp 2 (different dept) -> DENIED (returns Lead's own 0 entries)
+        res_lead_diff = await client.get(
+            f"/api/v1/timesheets/entries?user_id={emp2_id}", headers=h_lead
+        )
+        assert res_lead_diff.status_code == 200
+        assert len(res_lead_diff.json()["data"]) == 0

@@ -333,27 +333,30 @@ def require_permission(
     return permission_checker
 
 
-def get_authorized_target_user_id(
+async def get_authorized_target_user_id(
     requested_user_id: Optional[uuid.UUID],
     current_user: User,
+    user_repository: Optional[UserRepository] = None,
     allowed_permissions: Optional[list[PermissionEnum | str]] = None,
     allowed_roles: Optional[list[UserRole | str]] = None,
 ) -> uuid.UUID:
     if not requested_user_id or requested_user_id == current_user.id:
         return current_user.id
 
-    effective_permissions: list[PermissionEnum | str] = list(
-        allowed_permissions
-        or [PermissionEnum.TIMESHEET_APPROVE, PermissionEnum.USERS_READ]
+    global_permissions: list[PermissionEnum | str] = list(
+        allowed_permissions or [PermissionEnum.TIMESHEET_APPROVE]
     )
-    effective_roles: list[UserRole | str] = list(
-        allowed_roles or [UserRole.HR_MANAGER, UserRole.DEPARTMENT_LEAD]
-    )
-
-    if has_any_permission(current_user, effective_permissions) or has_any_role(
-        current_user, effective_roles
+    if has_any_permission(current_user, global_permissions) or has_role(
+        current_user, UserRole.HR_MANAGER
     ):
         return requested_user_id
+
+    dept_roles: list[UserRole | str] = list(allowed_roles or [UserRole.DEPARTMENT_LEAD])
+    if has_any_role(current_user, dept_roles):
+        if current_user.department_id and user_repository:
+            target_user = await user_repository.get_by_id(requested_user_id)
+            if target_user and target_user.department_id == current_user.department_id:
+                return requested_user_id
 
     return current_user.id
 

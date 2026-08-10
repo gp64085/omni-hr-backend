@@ -10,6 +10,7 @@ from app.api.deps import (
     get_cache_service,
     get_current_user,
     get_timesheet_service,
+    get_user_repository,
     require_permission,
 )
 from app.core.services.cache_service import CacheService, cache_response
@@ -24,6 +25,7 @@ from app.modules.timesheets.schemas import (
     WeeklyTimesheetSummaryRead,
 )
 from app.modules.timesheets.service import TimesheetService
+from app.modules.users.repository import UserRepository
 from app.schemas.common import MetaPayload, StandardResponse
 
 timesheets_router = ProtectedAPIRouter()
@@ -62,9 +64,12 @@ async def list_timesheet_entries(
     end_date: Optional[date] = Query(None),
     entry_status: Optional[str] = Query(None, alias="status"),
     current_user: User = Depends(get_current_user),
+    user_repository: UserRepository = Depends(get_user_repository),
     timesheet_service: TimesheetService = Depends(get_timesheet_service),
 ):
-    target_user_id = get_authorized_target_user_id(user_id, current_user)
+    target_user_id = await get_authorized_target_user_id(
+        user_id, current_user, user_repository
+    )
     offset = (page - 1) * limit
     entries, total = await timesheet_service.list_entries(
         user_id=target_user_id,
@@ -167,9 +172,12 @@ async def get_weekly_timesheet_summary(
     end_date: date = Query(...),
     user_id: Optional[uuid.UUID] = Query(None),
     current_user: User = Depends(get_current_user),
+    user_repository: UserRepository = Depends(get_user_repository),
     timesheet_service: TimesheetService = Depends(get_timesheet_service),
 ):
-    target_user_id = get_authorized_target_user_id(user_id, current_user)
+    target_user_id = await get_authorized_target_user_id(
+        user_id, current_user, user_repository
+    )
     summary = await timesheet_service.get_weekly_summary(
         user_id=target_user_id, start_date=start_date, end_date=end_date
     )
