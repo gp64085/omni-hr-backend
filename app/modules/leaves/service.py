@@ -515,7 +515,9 @@ class LeaveService:
                 comp_off_credits=0.0,
             )
         else:
-            alloc.allocated_days = float(alloc.allocated_days) + float(payload.granted_days)
+            alloc.allocated_days = float(alloc.allocated_days) + float(
+                payload.granted_days
+            )
 
         await self._leave_repo.save_allocation(alloc)
         saved = await self._leave_repo.get_allocation_for_type(
