@@ -6,6 +6,7 @@ from fastapi import Depends, Query, Request, status
 
 from app.api.deps import (
     ProtectedAPIRouter,
+    get_authorized_target_user_id,
     get_cache_service,
     get_current_user,
     get_timesheet_service,
@@ -63,7 +64,7 @@ async def list_timesheet_entries(
     current_user: User = Depends(get_current_user),
     timesheet_service: TimesheetService = Depends(get_timesheet_service),
 ):
-    target_user_id = user_id or current_user.id
+    target_user_id = get_authorized_target_user_id(user_id, current_user)
     offset = (page - 1) * limit
     entries, total = await timesheet_service.list_entries(
         user_id=target_user_id,
@@ -168,7 +169,7 @@ async def get_weekly_timesheet_summary(
     current_user: User = Depends(get_current_user),
     timesheet_service: TimesheetService = Depends(get_timesheet_service),
 ):
-    target_user_id = user_id or current_user.id
+    target_user_id = get_authorized_target_user_id(user_id, current_user)
     summary = await timesheet_service.get_weekly_summary(
         user_id=target_user_id, start_date=start_date, end_date=end_date
     )

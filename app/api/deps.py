@@ -1,7 +1,7 @@
 import uuid
 from enum import Enum
 from functools import lru_cache
-from typing import Callable
+from typing import Callable, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -49,8 +49,14 @@ __all__ = [
     "get_timesheet_service",
     "get_audit_service",
     "get_current_user",
+    "is_super_admin",
+    "has_permission",
+    "has_any_permission",
+    "has_role",
+    "has_any_role",
     "require_roles",
     "require_permission",
+    "get_authorized_target_user_id",
     "ProtectedAPIRouter",
 ]
 
@@ -235,17 +241,67 @@ async def get_current_user(
     return user
 
 
+# -----------------------------------------------------------------------------
+# Generic Authorization Helpers
+# -----------------------------------------------------------------------------
+
+
+def is_super_admin(user: User) -> bool:
+    return user.role.name == UserRole.SUPER_ADMIN.value if user.role else False
+
+
+def has_permission(user: User, permission_code: PermissionEnum | str) -> bool:
+    if is_super_admin(user):
+        return True
+    code_str = (
+        permission_code.value if isinstance(permission_code, Enum) else permission_code
+    )
+    user_permissions = (
+        [p.code for p in user.role.permissions]
+        if user.role and user.role.permissions
+        else []
+    )
+    return code_str in user_permissions
+
+
+def has_any_permission(
+    user: User, permission_codes: list[PermissionEnum | str]
+) -> bool:
+    if is_super_admin(user):
+        return True
+    user_permissions = (
+        [p.code for p in user.role.permissions]
+        if user.role and user.role.permissions
+        else []
+    )
+    for p in permission_codes:
+        code_str = p.value if isinstance(p, Enum) else p
+        if code_str in user_permissions:
+            return True
+    return False
+
+
+def has_role(user: User, role_name: UserRole | str) -> bool:
+    if is_super_admin(user):
+        return True
+    role_str = role_name.value if isinstance(role_name, Enum) else role_name
+    user_role_name = user.role.name if user.role else None
+    return user_role_name == role_str
+
+
+def has_any_role(user: User, role_names: list[UserRole | str]) -> bool:
+    if is_super_admin(user):
+        return True
+    user_role_name = user.role.name if user.role else None
+    allowed_names = [
+        role.value if isinstance(role, Enum) else role for role in role_names
+    ]
+    return user_role_name in allowed_names
+
+
 def require_roles(allowed_roles: list[UserRole | str]) -> Callable:
     async def role_checker(current_user: User = Depends(get_current_user)) -> User:
-        allowed_names = [
-            role.value if isinstance(role, UserRole) else role for role in allowed_roles
-        ]
-        user_role_name = current_user.role.name if current_user.role else None
-
-        if (
-            user_role_name not in allowed_names
-            and user_role_name != UserRole.SUPER_ADMIN.value
-        ):
+        if not has_any_role(current_user, allowed_roles):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={
@@ -261,26 +317,10 @@ def require_roles(allowed_roles: list[UserRole | str]) -> Callable:
 def require_permission(
     permission_code: PermissionEnum | str,
 ) -> Callable:
-    target_code = (
-        permission_code.value if isinstance(permission_code, Enum) else permission_code
-    )
-
     async def permission_checker(
         current_user: User = Depends(get_current_user),
     ) -> User:
-        user_role_name = current_user.role.name if current_user.role else None
-
-        # Super admin always has full permissions
-        if user_role_name == UserRole.SUPER_ADMIN.value:
-            return current_user
-
-        user_permissions = (
-            [p.code for p in current_user.role.permissions]
-            if current_user.role and current_user.role.permissions
-            else []
-        )
-
-        if target_code not in user_permissions:
+        if not has_permission(current_user, permission_code):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={
@@ -291,6 +331,31 @@ def require_permission(
         return current_user
 
     return permission_checker
+
+
+def get_authorized_target_user_id(
+    requested_user_id: Optional[uuid.UUID],
+    current_user: User,
+    allowed_permissions: Optional[list[PermissionEnum | str]] = None,
+    allowed_roles: Optional[list[UserRole | str]] = None,
+) -> uuid.UUID:
+    if not requested_user_id or requested_user_id == current_user.id:
+        return current_user.id
+
+    effective_permissions: list[PermissionEnum | str] = list(
+        allowed_permissions
+        or [PermissionEnum.TIMESHEET_APPROVE, PermissionEnum.USERS_READ]
+    )
+    effective_roles: list[UserRole | str] = list(
+        allowed_roles or [UserRole.HR_MANAGER, UserRole.DEPARTMENT_LEAD]
+    )
+
+    if has_any_permission(current_user, effective_permissions) or has_any_role(
+        current_user, effective_roles
+    ):
+        return requested_user_id
+
+    return current_user.id
 
 
 # -----------------------------------------------------------------------------

@@ -253,3 +253,85 @@ async def test_timesheet_status_transition_and_rejection_reason():
         data_reject = res_reject.json()["data"]
         assert data_reject["status"] == "rejected"
         assert data_reject["rejection_reason"] == "Incomplete activity logs"
+
+
+@pytest.mark.asyncio
+async def test_timesheet_visibility_policy_for_user_id():
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        # Login as Admin & Employee
+        admin_login = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "admin@omni-hr.com", "password": "Password123!"},
+        )
+        admin_data = admin_login.json()["data"]
+        admin_headers = {"Authorization": f"Bearer {admin_data['access_token']}"}
+        admin_me = await client.get("/api/v1/users/me", headers=admin_headers)
+        admin_id = admin_me.json()["data"]["id"]
+
+        emp_login = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "employee@omni-hr.com", "password": "Password123!"},
+        )
+        emp_data = emp_login.json()["data"]
+        emp_headers = {"Authorization": f"Bearer {emp_data['access_token']}"}
+        emp_me = await client.get("/api/v1/users/me", headers=emp_headers)
+        emp_id = emp_me.json()["data"]["id"]
+
+        today_str = str(date.today())
+
+        # Employee creates an entry (5.0 hrs)
+        res_emp_entry = await client.post(
+            "/api/v1/timesheets/entries",
+            json={
+                "work_date": today_str,
+                "hours_spent": 5.0,
+                "is_billable": True,
+                "activity_summary": "Employee Work",
+            },
+            headers=emp_headers,
+        )
+        assert res_emp_entry.status_code == 201
+
+        # Admin creates an entry (7.0 hrs)
+        res_admin_entry = await client.post(
+            "/api/v1/timesheets/entries",
+            json={
+                "work_date": today_str,
+                "hours_spent": 7.0,
+                "is_billable": True,
+                "activity_summary": "Admin Work",
+            },
+            headers=admin_headers,
+        )
+        assert res_admin_entry.status_code == 201
+
+        # 1. Employee attempts to query Admin's entries via user_id -> should be ignored, returning Employee's 5.0 hr entry
+        res_emp_peek = await client.get(
+            f"/api/v1/timesheets/entries?user_id={admin_id}",
+            headers=emp_headers,
+        )
+        assert res_emp_peek.status_code == 200
+        entries_peek = res_emp_peek.json()["data"]
+        assert len(entries_peek) == 1
+        assert entries_peek[0]["hours_spent"] == 5.0
+
+        # 2. Employee attempts to query Admin's summary via user_id -> should be ignored, returning Employee's 5.0 hr summary
+        res_emp_summary_peek = await client.get(
+            f"/api/v1/timesheets/summary?start_date={today_str}&end_date={today_str}&user_id={admin_id}",
+            headers=emp_headers,
+        )
+        assert res_emp_summary_peek.status_code == 200
+        summary_peek = res_emp_summary_peek.json()["data"]
+        assert summary_peek["total_hours"] == 5.0
+
+        # 3. Admin queries Employee's entries via user_id -> authorized, returning Employee's 5.0 hr entry
+        res_admin_query = await client.get(
+            f"/api/v1/timesheets/entries?user_id={emp_id}",
+            headers=admin_headers,
+        )
+        assert res_admin_query.status_code == 200
+        entries_admin_query = res_admin_query.json()["data"]
+        assert len(entries_admin_query) == 1
+        assert entries_admin_query[0]["hours_spent"] == 5.0

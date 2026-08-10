@@ -82,7 +82,7 @@ class LeaveService:
                     user_id=user_id,
                     leave_type_id=lt.id,
                     year=year,
-                    allocated_days=float(lt.default_quota),
+                    allocated_days=lt.default_quota or 0,
                     used_days=0.0,
                     comp_off_credits=0.0,
                 )
@@ -97,9 +97,9 @@ class LeaveService:
 
             alloc_entity = existing_type_map[lt.id]
             alloc_dict = LeaveAllocationRead.model_validate(alloc_entity)
-            alloc_dict.remaining_days = float(
+            alloc_dict.remaining_days = (
                 alloc_entity.allocated_days + alloc_entity.comp_off_credits
-            ) - float(alloc_entity.used_days)
+            ) - alloc_entity.used_days
             result_allocations.append(alloc_dict)
 
         return result_allocations
@@ -206,7 +206,7 @@ class LeaveService:
                 user_id, payload.leave_type_id, payload.start_date.year
             )
             if alloc:
-                alloc.used_days = float(alloc.used_days) + total_working_days
+                alloc.used_days = alloc.used_days + total_working_days
                 await self._leave_repo.save_allocation(alloc)
 
         created_details = await self._leave_repo.get_leave_request_with_details(
@@ -305,9 +305,8 @@ class LeaveService:
                 leave_request.start_date.year,
             )
             if alloc:
-                alloc.used_days = float(alloc.used_days) + float(
-                    leave_request.total_days
-                )
+                alloc.used_days = alloc.used_days + leave_request.total_days
+
                 await self._leave_repo.save_allocation(alloc)
 
         # Audit log entry
@@ -388,7 +387,7 @@ class LeaveService:
             )
             if alloc:
                 alloc.used_days = max(
-                    0.0, float(alloc.used_days) - float(leave_request.total_days)
+                    0.0, (alloc.used_days or 0.0) - leave_request.total_days
                 )
                 await self._leave_repo.save_allocation(alloc)
 
@@ -487,7 +486,7 @@ class LeaveService:
                     if payload.designation_id
                     else None,
                     "frequency": payload.frequency.value,
-                    "accrual_rate": float(payload.accrual_rate),
+                    "accrual_rate": payload.accrual_rate,
                 },
             )
             await self._audit_repo.create_log(audit)
@@ -514,7 +513,7 @@ class LeaveService:
                 comp_off_credits=0.0,
             )
         else:
-            alloc.allocated_days = float(alloc.allocated_days) + payload.granted_days
+            alloc.allocated_days = alloc.allocated_days + payload.granted_days
 
         await self._leave_repo.save_allocation(alloc)
         saved = await self._leave_repo.get_allocation_for_type(
@@ -532,7 +531,7 @@ class LeaveService:
                 "granted_days": payload.granted_days,
                 "reason": payload.reason,
                 "year": payload.year,
-                "new_allocated_days": float(saved.allocated_days) if saved else None,
+                "new_allocated_days": saved.allocated_days if saved else None,
             },
         )
         await self._audit_repo.create_log(audit_entry)
@@ -540,9 +539,9 @@ class LeaveService:
         alloc_read = LeaveAllocationRead.model_validate(saved)
 
         if saved:
-            alloc_read.remaining_days = float(
+            alloc_read.remaining_days = (
                 saved.allocated_days + saved.comp_off_credits
-            ) - float(saved.used_days)
+            ) - saved.used_days
 
         return alloc_read
 
@@ -609,10 +608,10 @@ class LeaveService:
                         should_accrue = today.year > last_date.year
 
                 if should_accrue:
-                    prev_allocated = float(alloc.allocated_days)
-                    new_allocation = prev_allocated + float(policy.accrual_rate)
+                    prev_allocated = alloc.allocated_days
+                    new_allocation = prev_allocated + policy.accrual_rate
                     if policy.max_quota is not None:
-                        new_allocation = min(float(policy.max_quota), new_allocation)
+                        new_allocation = min(policy.max_quota, new_allocation)
 
                     alloc.allocated_days = new_allocation
                     alloc.last_accrual_date = today
@@ -629,9 +628,9 @@ class LeaveService:
                             "policy_id": str(policy.id),
                             "leave_type_id": str(policy.leave_type_id),
                             "frequency": policy.frequency.value,
-                            "accrual_rate": float(policy.accrual_rate),
+                            "accrual_rate": policy.accrual_rate,
                             "previous_allocated_days": prev_allocated,
-                            "new_allocated_days": float(alloc.allocated_days),
+                            "new_allocated_days": alloc.allocated_days,
                             "accrual_date": today.isoformat(),
                         },
                     )
