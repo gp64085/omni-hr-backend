@@ -68,7 +68,7 @@ async def create_user(
     cache_service: CacheService = Depends(get_cache_service),
 ):
     created_user = await user_service.create_user(payload, current_user)
-    await cache_service.invalidate_prefix("users")
+    await cache_service.invalidate_prefixes("users_list", "users")
     return StandardResponse.ok(data=created_user)
 
 

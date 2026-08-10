@@ -150,8 +150,12 @@ async def create_or_update_policy(
     payload: LeaveAccrualPolicyCreatePayload,
     current_user: User = Depends(require_permission(PermissionEnum.LEAVE_MANAGE_TYPES)),
     leave_service: LeaveService = Depends(get_leave_service),
+    cache_service: CacheService = Depends(get_cache_service),
 ):
-    policy = await leave_service.create_or_update_accrual_policy(payload)
+    policy = await leave_service.create_or_update_accrual_policy(
+        payload, user_id=current_user.id
+    )
+    await cache_service.invalidate_prefixes("leave_policies")
     return StandardResponse.ok(data=policy)
 
 
@@ -160,7 +164,9 @@ async def create_or_update_policy(
     response_model=StandardResponse[list[LeaveAccrualPolicyRead]],
     response_model_exclude_none=True,
 )
+@cache_response(ttl_seconds=300, key_prefix="leave_policies")
 async def list_policies(
+    request: Request,
     current_user: User = Depends(require_permission(PermissionEnum.LEAVE_READ)),
     leave_service: LeaveService = Depends(get_leave_service),
 ):
@@ -179,7 +185,9 @@ async def grant_manual_allocation(
     leave_service: LeaveService = Depends(get_leave_service),
     cache_service: CacheService = Depends(get_cache_service),
 ):
-    granted = await leave_service.grant_manual_allocation(payload)
+    granted = await leave_service.grant_manual_allocation(
+        payload, granter_id=current_user.id
+    )
     await cache_service.invalidate_prefixes("leave_balance")
     return StandardResponse.ok(data=granted)
 
@@ -249,6 +257,8 @@ async def create_holiday(
     leave_service: LeaveService = Depends(get_leave_service),
     cache_service: CacheService = Depends(get_cache_service),
 ):
-    created_holiday = await leave_service.create_holiday(payload)
+    created_holiday = await leave_service.create_holiday(
+        payload, user_id=current_user.id
+    )
     await cache_service.invalidate_prefix("company_holidays")
     return StandardResponse.ok(data=created_holiday)

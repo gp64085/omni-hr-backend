@@ -1,7 +1,7 @@
 import uuid
 from typing import Optional, Sequence
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -47,12 +47,7 @@ class ProjectRepository(BaseRepository[Project]):
             .where(Project.is_active.is_(True))
         )
         if department_id:
-            query = query.where(
-                or_(
-                    Project.departments.any(Department.id == department_id),
-                    ~Project.departments.any(),
-                )
-            )
+            query = query.where(Project.departments.any(Department.id == department_id))
         query_result = await self._database_session.execute(query)
         return query_result.scalars().all()
 

@@ -19,7 +19,6 @@ from app.models.leave import (
 from app.modules.audit.repository import AuditLogRepository
 from app.modules.leaves.repository import LeaveRepository
 from app.modules.leaves.schemas import (
-    AuditLogRead,
     HolidayCreatePayload,
     HolidayRead,
     LeaveAccrualPolicyCreatePayload,
@@ -409,7 +408,9 @@ class LeaveService:
         holidays = await self._leave_repo.get_company_holidays(year)
         return [HolidayRead.model_validate(h) for h in holidays]
 
-    async def create_holiday(self, payload: HolidayCreatePayload) -> HolidayRead:
+    async def create_holiday(
+        self, payload: HolidayCreatePayload, user_id: Optional[uuid.UUID] = None
+    ) -> HolidayRead:
         existing = await self._leave_repo.get_holiday_by_date(payload.holiday_date)
         if existing:
             raise HTTPException(
@@ -430,6 +431,7 @@ class LeaveService:
 
         if self._audit_repo:
             audit = AuditLog(
+                user_id=user_id,
                 module=AuditModule.HOLIDAYS.value,
                 action=AuditAction.HOLIDAY_CREATE.value,
                 entity=AuditEntity.HOLIDAY.value,
@@ -444,7 +446,9 @@ class LeaveService:
         return HolidayRead.model_validate(created)
 
     async def create_or_update_accrual_policy(
-        self, payload: LeaveAccrualPolicyCreatePayload
+        self,
+        payload: LeaveAccrualPolicyCreatePayload,
+        user_id: Optional[uuid.UUID] = None,
     ) -> LeaveAccrualPolicyRead:
         leave_type = await self._leave_repo.get_leave_type_by_id(payload.leave_type_id)
         if not leave_type:
@@ -478,6 +482,7 @@ class LeaveService:
 
         if self._audit_repo:
             audit = AuditLog(
+                user_id=user_id,
                 module=AuditModule.LEAVES.value,
                 action=AuditAction.ACCRUAL_POLICY_CONFIGURED.value,
                 entity=AuditEntity.LEAVE_POLICY.value,
@@ -488,7 +493,7 @@ class LeaveService:
                     if payload.designation_id
                     else None,
                     "frequency": payload.frequency.value,
-                    "accrual_rate": payload.accrual_rate,
+                    "accrual_rate": float(payload.accrual_rate),
                 },
             )
             await self._audit_repo.create_log(audit)
@@ -500,7 +505,9 @@ class LeaveService:
         return [LeaveAccrualPolicyRead.model_validate(p) for p in policies]
 
     async def grant_manual_allocation(
-        self, payload: ManualAllocationGrantPayload
+        self,
+        payload: ManualAllocationGrantPayload,
+        granter_id: Optional[uuid.UUID] = None,
     ) -> LeaveAllocationRead:
         alloc = await self._leave_repo.get_allocation_for_type(
             payload.user_id, payload.leave_type_id, payload.year
@@ -526,7 +533,7 @@ class LeaveService:
 
         # Audit log for manual grant
         audit_entry = AuditLog(
-            user_id=payload.user_id,
+            user_id=granter_id or payload.user_id,
             module=AuditModule.LEAVES.value,
             action=AuditAction.MANUAL_LEAVE_GRANT.value,
             entity=AuditEntity.LEAVE_ALLOCATION.value,
@@ -612,10 +619,10 @@ class LeaveService:
                         should_accrue = today.year > last_date.year
 
                 if should_accrue:
-                    prev_allocated = alloc.allocated_days
-                    new_allocation = prev_allocated + policy.accrual_rate
+                    prev_allocated = float(alloc.allocated_days)
+                    new_allocation = prev_allocated + float(policy.accrual_rate)
                     if policy.max_quota is not None:
-                        new_allocation = min(policy.max_quota, new_allocation)
+                        new_allocation = min(float(policy.max_quota), new_allocation)
 
                     alloc.allocated_days = new_allocation
                     alloc.last_accrual_date = today
@@ -632,9 +639,9 @@ class LeaveService:
                             "policy_id": str(policy.id),
                             "leave_type_id": str(policy.leave_type_id),
                             "frequency": policy.frequency.value,
-                            "accrual_rate": policy.accrual_rate,
+                            "accrual_rate": float(policy.accrual_rate),
                             "previous_allocated_days": prev_allocated,
-                            "new_allocated_days": alloc.allocated_days,
+                            "new_allocated_days": float(alloc.allocated_days),
                             "accrual_date": today.isoformat(),
                         },
                     )
@@ -643,17 +650,3 @@ class LeaveService:
                     total_accrued_count += 1
 
         return total_accrued_count
-
-    async def list_audit_logs(
-        self,
-        page: int = 1,
-        limit: int = 20,
-        user_id: Optional[uuid.UUID] = None,
-        action: Optional[str] = None,
-        entity: Optional[str] = None,
-    ) -> tuple[list[AuditLogRead], int]:
-        offset = (page - 1) * limit
-        records, total = await self._leave_repo.search_audit_logs(
-            offset=offset, limit=limit, user_id=user_id, action=action, entity=entity
-        )
-        return [AuditLogRead.model_validate(r) for r in records], total

@@ -35,8 +35,10 @@ async def create_project(
     project_service: ProjectService = Depends(get_project_service),
     cache_service: CacheService = Depends(get_cache_service),
 ):
-    created_project = await project_service.create_project(payload)
-    await cache_service.invalidate_prefixes("projects_list")
+    created_project = await project_service.create_project(
+        payload, user_id=current_user.id
+    )
+    await cache_service.invalidate_prefixes("projects_list", "project_detail")
     return StandardResponse.ok(data=created_project)
 
 
@@ -52,7 +54,9 @@ async def list_projects(
     current_user: User = Depends(require_permission(PermissionEnum.PROJECTS_READ)),
     project_service: ProjectService = Depends(get_project_service),
 ):
-    projects = await project_service.list_projects(department_id=department_id)
+    projects = await project_service.list_projects(
+        department_id=department_id, user_id=current_user.id
+    )
     return StandardResponse.ok(data=projects)
 
 
@@ -61,12 +65,16 @@ async def list_projects(
     response_model=StandardResponse[ProjectRead],
     response_model_exclude_none=True,
 )
+@cache_response(ttl_seconds=300, key_prefix="project_detail")
 async def get_project(
+    request: Request,
     project_id: uuid.UUID,
     current_user: User = Depends(require_permission(PermissionEnum.PROJECTS_READ)),
     project_service: ProjectService = Depends(get_project_service),
 ):
-    project = await project_service.get_project_by_id(project_id)
+    project = await project_service.get_project_by_id(
+        project_id, user_id=current_user.id
+    )
     return StandardResponse.ok(data=project)
 
 
@@ -82,6 +90,8 @@ async def update_project(
     project_service: ProjectService = Depends(get_project_service),
     cache_service: CacheService = Depends(get_cache_service),
 ):
-    updated_project = await project_service.update_project(project_id, payload)
-    await cache_service.invalidate_prefixes("projects_list")
+    updated_project = await project_service.update_project(
+        project_id, payload, user_id=current_user.id
+    )
+    await cache_service.invalidate_prefixes("projects_list", "project_detail")
     return StandardResponse.ok(data=updated_project)

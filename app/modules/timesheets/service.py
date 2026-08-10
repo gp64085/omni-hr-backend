@@ -131,6 +131,16 @@ class TimesheetService:
 
         updated_entry = await self._timesheet_repo.update(entry, update_fields)
 
+        audit_entry = AuditLog(
+            user_id=user_id,
+            module=AuditModule.TIMESHEETS,
+            action=AuditAction.TIMESHEET_UPDATE.value,
+            entity=AuditEntity.TIMESHEET.value,
+            entity_id=updated_entry.id,
+            extra_metadata={"updated_fields": list(update_fields.keys())},
+        )
+        await self._audit_repo.create_log(audit_entry)
+
         project_name = None
         if updated_entry.project_id:
             project = await self._project_repo.get_by_id(updated_entry.project_id)
@@ -162,6 +172,15 @@ class TimesheetService:
             )
 
         await self._timesheet_repo.delete(entry)
+
+        audit_entry = AuditLog(
+            user_id=user_id,
+            module=AuditModule.TIMESHEETS.value,
+            action=AuditAction.TIMESHEET_DELETE.value,
+            entity=AuditEntity.TIMESHEET.value,
+            entity_id=entry_id,
+        )
+        await self._audit_repo.create_log(audit_entry)
 
     async def list_entries(
         self,
