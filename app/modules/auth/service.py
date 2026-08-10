@@ -2,7 +2,6 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.services.password_service import PasswordService
@@ -17,11 +16,9 @@ from app.modules.users.repository import UserRepository
 class AuthService:
     def __init__(
         self,
-        database_session: AsyncSession,
         user_repository: UserRepository,
         audit_repository: AuditLogRepository,
     ):
-        self._database_session = database_session
         self._user_repository = user_repository
         self._audit_repository = audit_repository
 

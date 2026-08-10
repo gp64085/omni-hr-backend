@@ -3,7 +3,6 @@ from datetime import date, timedelta
 from typing import Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.audit import AuditAction, AuditEntity, AuditLog, AuditModule
 from app.models.holiday import CompanyHoliday
@@ -37,13 +36,11 @@ from app.modules.leaves.schemas import (
 class LeaveService:
     def __init__(
         self,
-        database_session: AsyncSession,
         leave_repository: LeaveRepository,
         audit_repository: AuditLogRepository,
     ):
-        self.database_session = database_session
-        self.leave_repo = leave_repository
-        self.audit_repo = audit_repository
+        self._leave_repo = leave_repository
+        self._audit_repo = audit_repository
 
     def calculate_working_days(
         self,
@@ -68,14 +65,14 @@ class LeaveService:
         return total_days
 
     async def get_leave_types(self) -> list[LeaveTypeRead]:
-        types = await self.leave_repo.get_leave_types()
+        types = await self._leave_repo.get_leave_types()
         return [LeaveTypeRead.model_validate(t) for t in types]
 
     async def get_user_balances(
         self, user_id: uuid.UUID, year: int
     ) -> list[LeaveAllocationRead]:
-        leave_types = await self.leave_repo.get_leave_types()
-        existing_allocations = await self.leave_repo.get_allocations(user_id, year)
+        leave_types = await self._leave_repo.get_leave_types()
+        existing_allocations = await self._leave_repo.get_allocations(user_id, year)
         existing_type_map = {a.leave_type_id: a for a in existing_allocations}
 
         result_allocations = []
@@ -85,13 +82,15 @@ class LeaveService:
                     user_id=user_id,
                     leave_type_id=lt.id,
                     year=year,
-                    allocated_days=float(lt.default_quota),
+                    allocated_days=float(lt.default_quota)
+                    if lt.default_quota is not None
+                    else 0.0,
                     used_days=0.0,
                     comp_off_credits=0.0,
                 )
-                saved = await self.leave_repo.save_allocation(new_allocation)
+                saved = await self._leave_repo.save_allocation(new_allocation)
                 # Refresh eager loading
-                alloc = await self.leave_repo.get_allocation_for_type(
+                alloc = await self._leave_repo.get_allocation_for_type(
                     user_id, lt.id, year
                 )
                 if alloc:
@@ -119,7 +118,7 @@ class LeaveService:
                 },
             )
 
-        leave_type = await self.leave_repo.get_leave_type_by_id(payload.leave_type_id)
+        leave_type = await self._leave_repo.get_leave_type_by_id(payload.leave_type_id)
         if not leave_type:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -130,7 +129,7 @@ class LeaveService:
             )
 
         # Check overlapping leave requests
-        overlaps = await self.leave_repo.get_overlapping_requests(
+        overlaps = await self._leave_repo.get_overlapping_requests(
             user_id, payload.start_date, payload.end_date
         )
         if overlaps:
@@ -144,7 +143,7 @@ class LeaveService:
             )
 
         # Calculate working days excluding weekends & company holidays
-        holidays = await self.leave_repo.get_company_holidays(payload.start_date.year)
+        holidays = await self._leave_repo.get_company_holidays(payload.start_date.year)
         holiday_dates = {h.holiday_date for h in holidays}
         total_working_days = self.calculate_working_days(
             payload.start_date, payload.end_date, payload.half_day_type, holiday_dates
@@ -201,22 +200,22 @@ class LeaveService:
             is_auto_approved=is_auto_approved,
             reason=payload.reason,
         )
-        await self.leave_repo.create(new_request)
+        await self._leave_repo.create(new_request)
 
         # Update used days if auto-approved
         if is_auto_approved and leave_type.name != LeaveTypeEnum.UNPAID:
-            alloc = await self.leave_repo.get_allocation_for_type(
+            alloc = await self._leave_repo.get_allocation_for_type(
                 user_id, payload.leave_type_id, payload.start_date.year
             )
             if alloc:
-                alloc.used_days = float(alloc.used_days) + total_working_days
-                await self.leave_repo.save_allocation(alloc)
+                alloc.used_days = float(alloc.used_days) + float(total_working_days)
+                await self._leave_repo.save_allocation(alloc)
 
-        created_details = await self.leave_repo.get_leave_request_with_details(
+        created_details = await self._leave_repo.get_leave_request_with_details(
             new_request.id
         )
 
-        if self.audit_repo:
+        if self._audit_repo:
             audit = AuditLog(
                 user_id=user_id,
                 module=AuditModule.LEAVES.value,
@@ -230,7 +229,7 @@ class LeaveService:
                     "status": leave_status.value,
                 },
             )
-            await self.audit_repo.create_log(audit)
+            await self._audit_repo.create_log(audit)
 
         return LeaveRequestRead.model_validate(created_details)
 
@@ -244,7 +243,7 @@ class LeaveService:
         end_date: Optional[date] = None,
     ) -> tuple[list[LeaveRequestRead], int]:
         offset = (page - 1) * limit
-        requests, total = await self.leave_repo.search_leave_requests(
+        requests, total = await self._leave_repo.search_leave_requests(
             offset=offset,
             limit=limit,
             user_id=user_id,
@@ -261,7 +260,9 @@ class LeaveService:
         approver_id: uuid.UUID,
     ) -> LeaveRequestRead:
         """Approve or reject a pending leave request (Single-Tier Manager/HR Approval Workflow)."""
-        leave_request = await self.leave_repo.get_leave_request_with_details(request_id)
+        leave_request = await self._leave_repo.get_leave_request_with_details(
+            request_id
+        )
 
         if not leave_request:
             raise HTTPException(
@@ -298,18 +299,17 @@ class LeaveService:
         # If approved, deduct used_days from allocation
         if (
             payload.status == LeaveStatus.APPROVED
-            and leave_request.leave_type.name != LeaveTypeEnum.UNPAID
+            and leave_request.leave_type != LeaveTypeEnum.UNPAID
         ):
-            alloc = await self.leave_repo.get_allocation_for_type(
+            alloc = await self._leave_repo.get_allocation_for_type(
                 leave_request.user_id,
                 leave_request.leave_type_id,
                 leave_request.start_date.year,
             )
             if alloc:
-                alloc.used_days = float(alloc.used_days) + float(
-                    leave_request.total_days
-                )
-                await self.leave_repo.save_allocation(alloc)
+                alloc.used_days = alloc.used_days + leave_request.total_days
+
+                await self._leave_repo.save_allocation(alloc)
 
         # Audit log entry
         approval_audit = LeaveApproval(
@@ -319,9 +319,9 @@ class LeaveService:
             status=payload.status,
             comments=payload.comments or payload.rejection_reason,
         )
-        await self.leave_repo.save_approval(approval_audit)
+        await self._leave_repo.save_approval(approval_audit)
 
-        if self.audit_repo:
+        if self._audit_repo:
             audit = AuditLog(
                 user_id=approver_id,
                 module=AuditModule.LEAVES.value,
@@ -333,13 +333,15 @@ class LeaveService:
                     "target_user_id": str(leave_request.user_id),
                 },
             )
-            await self.audit_repo.create_log(audit)
+            await self._audit_repo.create_log(audit)
 
-        updated = await self.leave_repo.get_leave_request_with_details(request_id)
+        updated = await self._leave_repo.get_leave_request_with_details(request_id)
         return LeaveRequestRead.model_validate(updated)
 
     async def cancel_leave(self, request_id: uuid.UUID, user_id: uuid.UUID) -> None:
-        leave_request = await self.leave_repo.get_leave_request_with_details(request_id)
+        leave_request = await self._leave_repo.get_leave_request_with_details(
+            request_id
+        )
         if not leave_request:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -370,7 +372,7 @@ class LeaveService:
         # Restore used_days if request was previously approved
         if (
             leave_request.status == LeaveStatus.APPROVED
-            and leave_request.leave_type.name != LeaveTypeEnum.UNPAID
+            and leave_request.leave_type != LeaveTypeEnum.UNPAID
         ):
             if leave_request.start_date <= date.today():
                 raise HTTPException(
@@ -380,20 +382,20 @@ class LeaveService:
                         "message": "Cannot cancel an approved leave that has already started or passed.",
                     },
                 )
-            alloc = await self.leave_repo.get_allocation_for_type(
+            alloc = await self._leave_repo.get_allocation_for_type(
                 user_id,
                 leave_request.leave_type_id,
                 leave_request.start_date.year,
             )
             if alloc:
                 alloc.used_days = max(
-                    0.0, float(alloc.used_days) - float(leave_request.total_days)
+                    0.0, (alloc.used_days or 0.0) - leave_request.total_days
                 )
-                await self.leave_repo.save_allocation(alloc)
+                await self._leave_repo.save_allocation(alloc)
 
         leave_request.status = LeaveStatus.CANCELLED
 
-        if self.audit_repo:
+        if self._audit_repo:
             audit = AuditLog(
                 user_id=user_id,
                 module=AuditModule.LEAVES.value,
@@ -401,14 +403,14 @@ class LeaveService:
                 entity=AuditEntity.LEAVE_REQUEST.value,
                 entity_id=request_id,
             )
-            await self.audit_repo.create_log(audit)
+            await self._audit_repo.create_log(audit)
 
     async def list_holidays(self, year: Optional[int] = None) -> list[HolidayRead]:
-        holidays = await self.leave_repo.get_company_holidays(year)
+        holidays = await self._leave_repo.get_company_holidays(year)
         return [HolidayRead.model_validate(h) for h in holidays]
 
     async def create_holiday(self, payload: HolidayCreatePayload) -> HolidayRead:
-        existing = await self.leave_repo.get_holiday_by_date(payload.holiday_date)
+        existing = await self._leave_repo.get_holiday_by_date(payload.holiday_date)
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -424,9 +426,9 @@ class LeaveService:
             is_optional=payload.is_optional,
             description=payload.description,
         )
-        created = await self.leave_repo.create_holiday(holiday)
+        created = await self._leave_repo.create_holiday(holiday)
 
-        if self.audit_repo:
+        if self._audit_repo:
             audit = AuditLog(
                 module=AuditModule.HOLIDAYS.value,
                 action=AuditAction.HOLIDAY_CREATE.value,
@@ -437,14 +439,14 @@ class LeaveService:
                     "holiday_date": created.holiday_date.isoformat(),
                 },
             )
-            await self.audit_repo.create_log(audit)
+            await self._audit_repo.create_log(audit)
 
         return HolidayRead.model_validate(created)
 
     async def create_or_update_accrual_policy(
         self, payload: LeaveAccrualPolicyCreatePayload
     ) -> LeaveAccrualPolicyRead:
-        leave_type = await self.leave_repo.get_leave_type_by_id(payload.leave_type_id)
+        leave_type = await self._leave_repo.get_leave_type_by_id(payload.leave_type_id)
         if not leave_type:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -454,7 +456,7 @@ class LeaveService:
                 },
             )
 
-        existing = await self.leave_repo.get_policy_by_designation_and_type(
+        existing = await self._leave_repo.get_policy_by_designation_and_type(
             payload.leave_type_id, payload.designation_id
         )
         if existing:
@@ -472,9 +474,9 @@ class LeaveService:
                 max_quota=payload.max_quota,
                 is_active=payload.is_active,
             )
-            await self.leave_repo.save_accrual_policy(policy)
+            await self._leave_repo.save_accrual_policy(policy)
 
-        if self.audit_repo:
+        if self._audit_repo:
             audit = AuditLog(
                 module=AuditModule.LEAVES.value,
                 action=AuditAction.ACCRUAL_POLICY_CONFIGURED.value,
@@ -486,21 +488,21 @@ class LeaveService:
                     if payload.designation_id
                     else None,
                     "frequency": payload.frequency.value,
-                    "accrual_rate": float(payload.accrual_rate),
+                    "accrual_rate": payload.accrual_rate,
                 },
             )
-            await self.audit_repo.create_log(audit)
+            await self._audit_repo.create_log(audit)
 
         return LeaveAccrualPolicyRead.model_validate(policy)
 
     async def list_accrual_policies(self) -> list[LeaveAccrualPolicyRead]:
-        policies = await self.leave_repo.get_active_accrual_policies()
+        policies = await self._leave_repo.get_active_accrual_policies()
         return [LeaveAccrualPolicyRead.model_validate(p) for p in policies]
 
     async def grant_manual_allocation(
         self, payload: ManualAllocationGrantPayload
     ) -> LeaveAllocationRead:
-        alloc = await self.leave_repo.get_allocation_for_type(
+        alloc = await self._leave_repo.get_allocation_for_type(
             payload.user_id, payload.leave_type_id, payload.year
         )
         if not alloc:
@@ -513,10 +515,12 @@ class LeaveService:
                 comp_off_credits=0.0,
             )
         else:
-            alloc.allocated_days = float(alloc.allocated_days) + payload.granted_days
+            alloc.allocated_days = float(alloc.allocated_days) + float(
+                payload.granted_days
+            )
 
-        await self.leave_repo.save_allocation(alloc)
-        saved = await self.leave_repo.get_allocation_for_type(
+        await self._leave_repo.save_allocation(alloc)
+        saved = await self._leave_repo.get_allocation_for_type(
             payload.user_id, payload.leave_type_id, payload.year
         )
 
@@ -526,20 +530,23 @@ class LeaveService:
             module=AuditModule.LEAVES.value,
             action=AuditAction.MANUAL_LEAVE_GRANT.value,
             entity=AuditEntity.LEAVE_ALLOCATION.value,
-            entity_id=saved.id,
+            entity_id=saved.id if saved else None,
             extra_metadata={
-                "granted_days": payload.granted_days,
+                "granted_days": float(payload.granted_days),
                 "reason": payload.reason,
                 "year": payload.year,
-                "new_allocated_days": float(saved.allocated_days),
+                "new_allocated_days": float(saved.allocated_days) if saved else None,
             },
         )
-        await self.audit_repo.create_log(audit_entry)
+        await self._audit_repo.create_log(audit_entry)
 
         alloc_read = LeaveAllocationRead.model_validate(saved)
-        alloc_read.remaining_days = float(
-            saved.allocated_days + saved.comp_off_credits
-        ) - float(saved.used_days)
+
+        if saved:
+            alloc_read.remaining_days = float(
+                saved.allocated_days + saved.comp_off_credits
+            ) - float(saved.used_days)
+
         return alloc_read
 
     async def trigger_periodic_accruals(
@@ -547,11 +554,11 @@ class LeaveService:
     ) -> int:
         """Process periodic leave accruals for all active users based on configured policies."""
         today = target_date or date.today()
-        policies = await self.leave_repo.get_active_accrual_policies()
+        policies = await self._leave_repo.get_active_accrual_policies()
         if not policies:
             return 0
 
-        active_users = await self.leave_repo.get_active_users()
+        active_users = await self._leave_repo.get_active_users()
         total_accrued_count = 0
 
         for user in active_users:
@@ -568,7 +575,7 @@ class LeaveService:
                 if policy.frequency == AccrualFrequency.MANUAL:
                     continue
 
-                alloc = await self.leave_repo.get_allocation_for_type(
+                alloc = await self._leave_repo.get_allocation_for_type(
                     user.id, policy.leave_type_id, today.year, for_update=True
                 )
 
@@ -581,7 +588,7 @@ class LeaveService:
                         used_days=0.0,
                         comp_off_credits=0.0,
                     )
-                    await self.leave_repo.save_allocation(alloc)
+                    await self._leave_repo.save_allocation(alloc)
 
                 last_date = alloc.last_accrual_date
 
@@ -605,14 +612,14 @@ class LeaveService:
                         should_accrue = today.year > last_date.year
 
                 if should_accrue:
-                    prev_allocated = float(alloc.allocated_days)
-                    new_allocation = prev_allocated + float(policy.accrual_rate)
+                    prev_allocated = alloc.allocated_days
+                    new_allocation = prev_allocated + policy.accrual_rate
                     if policy.max_quota is not None:
-                        new_allocation = min(float(policy.max_quota), new_allocation)
+                        new_allocation = min(policy.max_quota, new_allocation)
 
                     alloc.allocated_days = new_allocation
                     alloc.last_accrual_date = today
-                    await self.leave_repo.save_allocation(alloc)
+                    await self._leave_repo.save_allocation(alloc)
 
                     # Audit log for periodic accrual execution
                     accrual_audit = AuditLog(
@@ -625,13 +632,13 @@ class LeaveService:
                             "policy_id": str(policy.id),
                             "leave_type_id": str(policy.leave_type_id),
                             "frequency": policy.frequency.value,
-                            "accrual_rate": float(policy.accrual_rate),
+                            "accrual_rate": policy.accrual_rate,
                             "previous_allocated_days": prev_allocated,
-                            "new_allocated_days": float(alloc.allocated_days),
+                            "new_allocated_days": alloc.allocated_days,
                             "accrual_date": today.isoformat(),
                         },
                     )
-                    await self.audit_repo.create_log(accrual_audit)
+                    await self._audit_repo.create_log(accrual_audit)
 
                     total_accrued_count += 1
 
@@ -646,7 +653,7 @@ class LeaveService:
         entity: Optional[str] = None,
     ) -> tuple[list[AuditLogRead], int]:
         offset = (page - 1) * limit
-        records, total = await self.leave_repo.search_audit_logs(
+        records, total = await self._leave_repo.search_audit_logs(
             offset=offset, limit=limit, user_id=user_id, action=action, entity=entity
         )
         return [AuditLogRead.model_validate(r) for r in records], total

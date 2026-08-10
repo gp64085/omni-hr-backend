@@ -22,7 +22,7 @@ High-performance Enterprise HR Management System API built with **FastAPI**, **A
 ### 1. Authentication & RBAC (Role-Based Access Control)
 - **JWT Auth**: Login, Refresh token rotation, and Logout with token revocation.
 - **Dynamic System & Custom Roles**: Create custom roles with granular permission codes.
-- **Permission Guards**: Declarative route protection via `Depends(require_permission(...))`.
+- **Permission Guards**: Declarative role and granular permission enforcement across protected endpoints.
 
 ### 2. User & Profile Management
 - Self-service profile updates (contacts, bank info, emergency details).
@@ -40,6 +40,11 @@ High-performance Enterprise HR Management System API built with **FastAPI**, **A
 - **Automated Midnight Cron**: Background scheduler runs daily at 00:00 to accrue leave credits automatically up to configured `max_quota`.
 - **Manual HR Grants**: Direct leave allocation grants for joining bonuses or custom adjustments.
 - **Idempotency Guard**: Tracks `last_accrual_date` to eliminate double-crediting.
+
+### 5. Projects & Timesheet Tracking
+- **Multi-Department Project Allocation**: Flexible project configuration supporting both organization-wide initiatives and department-specific projects.
+- **Department-Based Filtering**: Retrieve active projects relevant to a specific department or accessible company-wide.
+- **Time Logging & Approval Workflow**: Track daily employee work hours, billable vs non-billable tasks, and manage approval workflows.
 
 ---
 

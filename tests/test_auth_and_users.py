@@ -39,52 +39,55 @@ async def override_get_db():
 @pytest_asyncio.fixture(autouse=True)
 async def setup_test_db():
     app.dependency_overrides[get_db] = override_get_db
-    async with test_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with test_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
 
-    # Seed test roles & users
-    async with TestingSessionLocal() as session:
-        admin_role = Role(
-            name=UserRole.SUPER_ADMIN.value,
-            description="Super Admin",
-            is_system=True,
-        )
-        emp_role = Role(
-            name=UserRole.EMPLOYEE.value,
-            description="Employee",
-            is_system=True,
-        )
-        session.add_all([admin_role, emp_role])
-        await session.flush()
+        # Seed test roles & users
+        async with TestingSessionLocal() as session:
+            admin_role = Role(
+                name=UserRole.SUPER_ADMIN.value,
+                description="Super Admin",
+                is_system=True,
+            )
+            emp_role = Role(
+                name=UserRole.EMPLOYEE.value,
+                description="Employee",
+                is_system=True,
+            )
+            session.add_all([admin_role, emp_role])
+            await session.flush()
 
-        admin = User(
-            email="admin_test@omnihr.com",
-            password_hash=get_password_hash("TestPass123!"),
-            first_name="Admin",
-            last_name="Tester",
-            role_id=admin_role.id,
-            is_active=True,
-        )
-        emp = User(
-            email="emp_test@omnihr.com",
-            password_hash=get_password_hash("EmpPass123!"),
-            first_name="Employee",
-            last_name="Tester",
-            role_id=emp_role.id,
-            is_active=True,
-        )
-        session.add_all([admin, emp])
-        await session.flush()
+            admin = User(
+                email="admin_test@omnihr.com",
+                password_hash=get_password_hash("TestPass123!"),
+                first_name="Admin",
+                last_name="Tester",
+                role_id=admin_role.id,
+                is_active=True,
+            )
+            emp = User(
+                email="emp_test@omnihr.com",
+                password_hash=get_password_hash("EmpPass123!"),
+                first_name="Employee",
+                last_name="Tester",
+                role_id=emp_role.id,
+                is_active=True,
+            )
+            session.add_all([admin, emp])
+            await session.flush()
 
-        session.add(EmployeeProfile(user_id=admin.id, phone_number="1234567890"))
-        session.add(EmployeeProfile(user_id=emp.id, phone_number="9876543210"))
-        await session.commit()
+            session.add(EmployeeProfile(user_id=admin.id, phone_number="1234567890"))
+            session.add(EmployeeProfile(user_id=emp.id, phone_number="9876543210"))
+            await session.commit()
 
-    yield
-
-    async with test_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-    app.dependency_overrides.clear()
+        yield
+    finally:
+        try:
+            async with test_engine.begin() as conn:
+                await conn.run_sync(Base.metadata.drop_all)
+        finally:
+            app.dependency_overrides.pop(get_db, None)
 
 
 @pytest.mark.asyncio

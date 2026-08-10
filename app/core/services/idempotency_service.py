@@ -31,7 +31,6 @@ class IdempotencyService:
     async def get_cached_response(
         self, idempotency_key: str, path: str
     ) -> Optional[JSONResponse]:
-        """Fetch cached response for an idempotency key."""
         client = self.client
         if not client or not idempotency_key:
             return None

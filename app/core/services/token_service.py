@@ -9,8 +9,6 @@ from app.core.config import settings
 
 
 class TokenService:
-    """Decoupled JWT Token Generation, Decoding, and Hashing Service."""
-
     @staticmethod
     def hash_token(token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()

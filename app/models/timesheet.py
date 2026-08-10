@@ -1,11 +1,43 @@
 import uuid
 from datetime import date, datetime, timezone
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import UUID, Boolean, Date, DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import (
+    UUID,
+    Boolean,
+    Column,
+    Date,
+    DateTime,
+    ForeignKey,
+    Numeric,
+    String,
+    Table,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
+
+if TYPE_CHECKING:
+    from app.models.organization import Department
+
+
+project_departments = Table(
+    "project_departments",
+    Base.metadata,
+    Column(
+        "project_id",
+        UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "department_id",
+        UUID(as_uuid=True),
+        ForeignKey("departments.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+)
 
 
 class Project(Base):
@@ -16,19 +48,14 @@ class Project(Base):
     )
     name: Mapped[str] = mapped_column(String(150), unique=True, nullable=False)
     code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
-    department_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("departments.id", ondelete="SET NULL"),
-        nullable=True,
-    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
     # Relationship
-    department: Mapped[Optional["Department"]] = relationship(
-        "Department", back_populates="projects"
+    departments: Mapped[list["Department"]] = relationship(
+        "Department", secondary=project_departments, back_populates="projects"
     )
 
 
@@ -54,6 +81,7 @@ class TimesheetEntry(Base):
     approver_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+    rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

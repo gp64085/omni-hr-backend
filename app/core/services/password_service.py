@@ -2,8 +2,6 @@ import bcrypt
 
 
 class PasswordService:
-    """Decoupled Password Hashing and Verification Service."""
-
     @staticmethod
     def verify_password(plain_password: str, hashed_password: str) -> bool:
         try:

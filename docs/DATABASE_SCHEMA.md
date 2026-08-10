@@ -156,9 +156,14 @@ CREATE TABLE projects (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(150) NOT NULL UNIQUE,
     code VARCHAR(50) NOT NULL UNIQUE,
-    department_id UUID REFERENCES departments(id) ON DELETE SET NULL,
     is_active BOOLEAN DEFAULT TRUE NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE project_departments (
+    project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+    department_id UUID REFERENCES departments(id) ON DELETE CASCADE,
+    PRIMARY KEY (project_id, department_id)
 );
 
 CREATE TABLE timesheet_entries (

@@ -1,13 +1,16 @@
 import enum
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import UUID, DateTime, ForeignKey, Numeric, String
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
+
+if TYPE_CHECKING:
+    from app.models.user import User
 
 
 class PayRunStatus(str, enum.Enum):

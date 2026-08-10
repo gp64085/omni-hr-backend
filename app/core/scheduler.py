@@ -39,7 +39,7 @@ async def _run_midnight_accrual_loop():
                     async with AsyncSessionLocal() as session:
                         repo = LeaveRepository(session)
                         audit_repo = AuditLogRepository(session)
-                        service = LeaveService(session, repo, audit_repo)
+                        service = LeaveService(repo, audit_repo)
                         updated_count = await service.trigger_periodic_accruals(
                             target_date=current_date
                         )

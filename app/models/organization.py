@@ -1,10 +1,16 @@
 import uuid
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from sqlalchemy import UUID, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
+from app.models.timesheet import project_departments
+
+if TYPE_CHECKING:
+    from app.models.timesheet import Project
+    from app.models.user import User
 
 
 class Department(Base):
@@ -21,7 +27,7 @@ class Department(Base):
     # Relationships
     users: Mapped[list["User"]] = relationship("User", back_populates="department")
     projects: Mapped[list["Project"]] = relationship(
-        "Project", back_populates="department"
+        "Project", secondary=project_departments, back_populates="departments"
     )
 
 

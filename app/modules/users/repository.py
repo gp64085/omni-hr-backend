@@ -14,7 +14,7 @@ class UserRepository(BaseRepository[User]):
         super().__init__(User, database_session)
 
     async def get_by_email(self, email_address: str) -> Optional[User]:
-        query_result = await self.database_session.execute(
+        query_result = await self._database_session.execute(
             select(User)
             .options(
                 selectinload(User.department),
@@ -27,7 +27,7 @@ class UserRepository(BaseRepository[User]):
         return query_result.scalar_one_or_none()
 
     async def get_with_details(self, user_id: uuid.UUID) -> Optional[User]:
-        query_result = await self.database_session.execute(
+        query_result = await self._database_session.execute(
             select(User)
             .options(
                 selectinload(User.department),
@@ -78,14 +78,16 @@ class UserRepository(BaseRepository[User]):
             )
 
         count_query = select(func.count()).select_from(query.subquery())
-        total_records = (await self.database_session.execute(count_query)).scalar() or 0
+        total_records = (
+            await self._database_session.execute(count_query)
+        ).scalar() or 0
 
         query = query.order_by(User.created_at.desc()).offset(offset).limit(limit)
-        user_records = (await self.database_session.execute(query)).scalars().all()
+        user_records = (await self._database_session.execute(query)).scalars().all()
         return user_records, total_records
 
     async def get_refresh_token(self, token_hash: str) -> Optional[RefreshToken]:
-        query_result = await self.database_session.execute(
+        query_result = await self._database_session.execute(
             select(RefreshToken).where(
                 RefreshToken.token_hash == token_hash,
                 RefreshToken.is_revoked.is_(False),
@@ -96,12 +98,17 @@ class UserRepository(BaseRepository[User]):
     async def save_refresh_token(
         self, refresh_token_entity: RefreshToken
     ) -> RefreshToken:
-        self.database_session.add(refresh_token_entity)
-        await self.database_session.flush()
+        self._database_session.add(refresh_token_entity)
+        await self._database_session.flush()
         return refresh_token_entity
 
     async def get_profile(self, user_id: uuid.UUID) -> Optional[EmployeeProfile]:
-        query_result = await self.database_session.execute(
+        query_result = await self._database_session.execute(
             select(EmployeeProfile).where(EmployeeProfile.user_id == user_id)
         )
         return query_result.scalar_one_or_none()
+
+    async def save_profile(self, profile: EmployeeProfile) -> EmployeeProfile:
+        self._database_session.add(profile)
+        await self._database_session.flush()
+        return profile

@@ -2,7 +2,6 @@ import uuid
 from typing import Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import get_password_hash
 from app.models.audit import AuditAction, AuditEntity, AuditLog, AuditModule
@@ -22,24 +21,21 @@ from app.modules.users.schemas import (
 class UserService:
     def __init__(
         self,
-        database_session: AsyncSession,
         user_repository: UserRepository,
         role_repository: RoleRepository,
         audit_repository: Optional[AuditLogRepository] = None,
     ):
-        self.database_session = database_session
-        self.user_repo = user_repository
-        self.role_repo = role_repository
-        self.audit_repo = audit_repository
+        self._user_repo = user_repository
+        self._role_repo = role_repository
+        self._audit_repo = audit_repository
 
     async def _get_user_or_404(
         self, user_id: uuid.UUID, with_details: bool = False
     ) -> User:
-        """Fetch user by ID or raise HTTP 404 Exception."""
         if with_details:
-            user = await self.user_repo.get_with_details(user_id)
+            user = await self._user_repo.get_with_details(user_id)
         else:
-            user = await self.user_repo.get_by_id(user_id)
+            user = await self._user_repo.get_by_id(user_id)
 
         if not user or not user.is_active:
             raise HTTPException(
@@ -55,7 +51,6 @@ class UserService:
     def _validate_role_assignment(
         self, target_role_name: str, requesting_user: Optional[User] = None
     ) -> None:
-        """Enforce actor-aware security policy for sensitive role assignments."""
         if target_role_name == UserRole.SUPER_ADMIN.value:
             requester_role_name = (
                 requesting_user.role.name
@@ -81,7 +76,7 @@ class UserService:
         role_name: Optional[str] = None,
     ) -> tuple[list[UserResponse], int]:
         offset = (page - 1) * limit
-        users, total = await self.user_repo.search_users(
+        users, total = await self._user_repo.search_users(
             offset=offset,
             limit=limit,
             search_term=search,
@@ -94,7 +89,7 @@ class UserService:
     async def create_user(
         self, payload: UserCreate, requesting_user: Optional[User] = None
     ) -> UserResponse:
-        existing = await self.user_repo.get_by_email(payload.email)
+        existing = await self._user_repo.get_by_email(payload.email)
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -106,11 +101,11 @@ class UserService:
 
         role_id = payload.role_id
         if not role_id:
-            default_role = await self.role_repo.get_by_name(UserRole.EMPLOYEE.value)
+            default_role = await self._role_repo.get_by_name(UserRole.EMPLOYEE.value)
             if default_role:
                 role_id = default_role.id
         else:
-            target_role = await self.role_repo.get_with_permissions(role_id)
+            target_role = await self._role_repo.get_with_permissions(role_id)
             if not target_role:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -132,14 +127,14 @@ class UserService:
             manager_id=payload.manager_id,
             is_active=True,
         )
-        await self.user_repo.create(new_user)
+        await self._user_repo.create(new_user)
 
         profile = EmployeeProfile(user_id=new_user.id)
-        self.database_session.add(profile)
+        await self._user_repo.save_profile(profile)
 
-        user_details = await self.user_repo.get_with_details(new_user.id)
+        user_details = await self._user_repo.get_with_details(new_user.id)
 
-        if self.audit_repo:
+        if self._audit_repo:
             audit = AuditLog(
                 user_id=requesting_user.id if requesting_user else new_user.id,
                 module=AuditModule.USERS.value,
@@ -150,34 +145,31 @@ class UserService:
                     "role_id": str(role_id) if role_id else None,
                 },
             )
-            await self.audit_repo.create_log(audit)
+            await self._audit_repo.create_log(audit)
 
         return UserResponse.model_validate(user_details)
 
     async def get_or_create_profile(self, user_id: uuid.UUID) -> ProfileResponse:
-        profile = await self.user_repo.get_profile(user_id)
+        profile = await self._user_repo.get_profile(user_id)
         if not profile:
             profile = EmployeeProfile(user_id=user_id)
-            self.database_session.add(profile)
-            await self.database_session.flush()
+            await self._user_repo.save_profile(profile)
 
         return ProfileResponse.model_validate(profile)
 
     async def update_profile(
         self, user_id: uuid.UUID, payload: ProfileUpdate
     ) -> ProfileResponse:
-        profile = await self.user_repo.get_profile(user_id)
+        profile = await self._user_repo.get_profile(user_id)
         if not profile:
             profile = EmployeeProfile(user_id=user_id)
-            self.database_session.add(profile)
+            await self._user_repo.save_profile(profile)
 
         update_data = payload.model_dump(exclude_unset=True)
         for field, val in update_data.items():
             setattr(profile, field, val)
 
-        await self.database_session.flush()
-
-        if self.audit_repo:
+        if self._audit_repo:
             audit = AuditLog(
                 user_id=user_id,
                 module=AuditModule.USERS.value,
@@ -186,7 +178,7 @@ class UserService:
                 entity_id=user_id,
                 extra_metadata={"updated_fields": list(update_data.keys())},
             )
-            await self.audit_repo.create_log(audit)
+            await self._audit_repo.create_log(audit)
 
         return ProfileResponse.model_validate(profile)
 
@@ -205,7 +197,7 @@ class UserService:
         update_data = payload.model_dump(exclude_unset=True)
 
         if "role_id" in update_data and update_data["role_id"] is not None:
-            target_role = await self.role_repo.get_with_permissions(
+            target_role = await self._role_repo.get_with_permissions(
                 update_data["role_id"]
             )
             if not target_role:
@@ -218,18 +210,11 @@ class UserService:
                 )
             self._validate_role_assignment(target_role.name, requesting_user)
 
-        updated_fields = []
-        for field_name, new_val in update_data.items():
-            if hasattr(existing_user, field_name):
-                current_val = getattr(existing_user, field_name)
-                if current_val != new_val:
-                    setattr(existing_user, field_name, new_val)
-                    updated_fields.append(field_name)
+        updated_fields = list(update_data.keys())
+        await self._user_repo.update(existing_user, update_data)
+        updated_user = await self._user_repo.get_with_details(user_id)
 
-        await self.user_repo.database_session.flush()
-        updated_user = await self.user_repo.get_with_details(user_id)
-
-        if self.audit_repo and updated_fields:
+        if self._audit_repo and updated_fields:
             audit = AuditLog(
                 user_id=requesting_user.id if requesting_user else user_id,
                 module=AuditModule.USERS.value,
@@ -238,7 +223,7 @@ class UserService:
                 entity_id=user_id,
                 extra_metadata={"updated_fields": updated_fields},
             )
-            await self.audit_repo.create_log(audit)
+            await self._audit_repo.create_log(audit)
 
         return UserResponse.model_validate(updated_user)
 
@@ -256,10 +241,9 @@ class UserService:
                 },
             )
 
-        existing_user.is_active = False
-        await self.user_repo.database_session.flush()
+        await self._user_repo.update(existing_user, {"is_active": False})
 
-        if self.audit_repo:
+        if self._audit_repo:
             audit = AuditLog(
                 user_id=requesting_user.id if requesting_user else user_id,
                 module=AuditModule.USERS.value,
@@ -267,4 +251,4 @@ class UserService:
                 entity=AuditEntity.USER.value,
                 entity_id=user_id,
             )
-            await self.audit_repo.create_log(audit)
+            await self._audit_repo.create_log(audit)

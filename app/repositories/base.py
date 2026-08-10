@@ -14,11 +14,11 @@ class BaseRepository(Generic[ModelType]):
 
     def __init__(self, model_class: Type[ModelType], database_session: AsyncSession):
         self.model_class = model_class
-        self.database_session = database_session
+        self._database_session = database_session
 
     async def get_by_id(self, entity_id: uuid.UUID) -> Optional[ModelType]:
-        result = await self.database_session.execute(
-            select(self.model_class).where(self.model_class.id == entity_id)
+        result = await self._database_session.execute(
+            select(self.model_class).where(self.model_class.id == entity_id)  # type: ignore
         )
         return result.scalar_one_or_none()
 
@@ -34,15 +34,17 @@ class BaseRepository(Generic[ModelType]):
                 query = query.where(condition)
 
         count_query = select(func.count()).select_from(query.subquery())
-        total_records = (await self.database_session.execute(count_query)).scalar() or 0
+        total_records = (
+            await self._database_session.execute(count_query)
+        ).scalar() or 0
 
         query = query.offset(offset).limit(limit)
-        results = (await self.database_session.execute(query)).scalars().all()
+        results = (await self._database_session.execute(query)).scalars().all()
         return results, total_records
 
     async def create(self, entity_instance: ModelType) -> ModelType:
-        self.database_session.add(entity_instance)
-        await self.database_session.flush()
+        self._database_session.add(entity_instance)
+        await self._database_session.flush()
         return entity_instance
 
     async def update(
@@ -51,9 +53,9 @@ class BaseRepository(Generic[ModelType]):
         for field_name, field_value in update_data.items():
             if hasattr(entity_instance, field_name):
                 setattr(entity_instance, field_name, field_value)
-        await self.database_session.flush()
+        await self._database_session.flush()
         return entity_instance
 
     async def delete(self, entity_instance: ModelType) -> None:
-        await self.database_session.delete(entity_instance)
-        await self.database_session.flush()
+        await self._database_session.delete(entity_instance)
+        await self._database_session.flush()

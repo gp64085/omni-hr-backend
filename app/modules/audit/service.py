@@ -2,8 +2,6 @@ import uuid
 from datetime import date
 from typing import Any, Optional
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.audit import AuditLog
 from app.modules.audit.repository import AuditLogRepository
 from app.modules.audit.schemas import AuditLogRead
@@ -12,11 +10,9 @@ from app.modules.audit.schemas import AuditLogRead
 class AuditLogService:
     def __init__(
         self,
-        database_session: AsyncSession,
         audit_repository: AuditLogRepository,
     ):
-        self.database_session = database_session
-        self.audit_repo = audit_repository
+        self._audit_repo = audit_repository
 
     async def log_event(
         self,
@@ -35,7 +31,7 @@ class AuditLogService:
             entity_id=entity_id,
             extra_metadata=extra_metadata,
         )
-        saved = await self.audit_repo.create_log(log_entry)
+        saved = await self._audit_repo.create_log(log_entry)
         return AuditLogRead.model_validate(saved)
 
     async def list_audit_logs(
@@ -50,7 +46,7 @@ class AuditLogService:
         end_date: Optional[date] = None,
     ) -> tuple[list[AuditLogRead], int]:
         offset = (page - 1) * limit
-        records, total = await self.audit_repo.search_audit_logs(
+        records, total = await self._audit_repo.search_audit_logs(
             offset=offset,
             limit=limit,
             module=module,

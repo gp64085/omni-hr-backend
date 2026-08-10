@@ -14,8 +14,8 @@ class AuditLogRepository(BaseRepository[AuditLog]):
         super().__init__(AuditLog, database_session)
 
     async def create_log(self, audit_log: AuditLog) -> AuditLog:
-        self.database_session.add(audit_log)
-        await self.database_session.flush()
+        self._database_session.add(audit_log)
+        await self._database_session.flush()
         return audit_log
 
     async def search_audit_logs(
@@ -45,8 +45,10 @@ class AuditLogRepository(BaseRepository[AuditLog]):
             query = query.where(func.date(AuditLog.created_at) <= end_date)
 
         count_query = select(func.count()).select_from(query.subquery())
-        total_records = (await self.database_session.execute(count_query)).scalar() or 0
+        total_records = (
+            await self._database_session.execute(count_query)
+        ).scalar() or 0
 
         query = query.order_by(AuditLog.created_at.desc()).offset(offset).limit(limit)
-        records = (await self.database_session.execute(query)).scalars().all()
+        records = (await self._database_session.execute(query)).scalars().all()
         return records, total_records

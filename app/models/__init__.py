@@ -14,7 +14,7 @@ from app.models.leave import (
 from app.models.organization import Department, Designation
 from app.models.payroll import PayRun, PayRunStatus, Payslip, SalaryStructure
 from app.models.role import Permission, Role, role_permissions
-from app.models.timesheet import Project, TimesheetEntry
+from app.models.timesheet import Project, TimesheetEntry, project_departments
 from app.models.user import EmployeeProfile, RefreshToken, User, UserRole
 
 __all__ = [
@@ -37,6 +37,7 @@ __all__ = [
     "LeaveStatus",
     "HalfDayType",
     "Project",
+    "project_departments",
     "TimesheetEntry",
     "SalaryStructure",
     "PayRun",

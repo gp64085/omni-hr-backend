@@ -3,7 +3,7 @@ name = "omni-hr-backend"
 version = "0.1.0"
 description = "Enterprise OmniHR Backend API with FastAPI and Async SQLAlchemy"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.110.0",
     "uvicorn[standard]>=0.28.0",
@@ -27,15 +27,25 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "httpx>=0.27.0",
     "ruff>=0.3.0",
+    "pyright>=1.1.411",
 ]
 
 [tool.ruff]
 line-length = 88
-target-version = "py312"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B"]
 ignore = ["B008", "F821", "E501"]
+
+[tool.pyright]
+include = ["app"]
+exclude = ["**/node_modules", "**/__pycache__", ".venv"]
+pythonVersion = "3.13"
+pythonPlatform = "Linux"
+typeCheckingMode = "standard"
+reportMissingImports = true
+reportMissingTypeStubs = false
 
 [build-system]
 requires = ["hatchling"]

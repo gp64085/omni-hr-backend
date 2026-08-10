@@ -1,7 +1,7 @@
 import uuid
 from enum import Enum
 from functools import lru_cache
-from typing import Callable
+from typing import Callable, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -21,8 +21,12 @@ from app.modules.audit.service import AuditLogService
 from app.modules.auth.service import AuthService
 from app.modules.leaves.repository import LeaveRepository
 from app.modules.leaves.service import LeaveService
+from app.modules.projects.repository import ProjectRepository
+from app.modules.projects.service import ProjectService
 from app.modules.roles.repository import RoleRepository
 from app.modules.roles.service import RoleService
+from app.modules.timesheets.repository import TimesheetRepository
+from app.modules.timesheets.service import TimesheetService
 from app.modules.users.repository import UserRepository
 from app.modules.users.service import UserService
 
@@ -35,14 +39,24 @@ __all__ = [
     "get_role_repository",
     "get_leave_repository",
     "get_audit_repository",
+    "get_project_repository",
+    "get_timesheet_repository",
     "get_auth_service",
     "get_user_service",
     "get_role_service",
     "get_leave_service",
+    "get_project_service",
+    "get_timesheet_service",
     "get_audit_service",
     "get_current_user",
+    "is_super_admin",
+    "has_permission",
+    "has_any_permission",
+    "has_role",
+    "has_any_role",
     "require_roles",
     "require_permission",
+    "get_authorized_target_user_id",
     "ProtectedAPIRouter",
 ]
 
@@ -74,25 +88,21 @@ def get_audit_repository(
 
 
 def get_auth_service(
-    database_session: AsyncSession = Depends(get_db),
     user_repository: UserRepository = Depends(get_user_repository),
     audit_repository: AuditLogRepository = Depends(get_audit_repository),
 ) -> AuthService:
     return AuthService(
-        database_session=database_session,
         user_repository=user_repository,
         audit_repository=audit_repository,
     )
 
 
 def get_user_service(
-    database_session: AsyncSession = Depends(get_db),
     user_repository: UserRepository = Depends(get_user_repository),
     role_repository: RoleRepository = Depends(get_role_repository),
     audit_repository: AuditLogRepository = Depends(get_audit_repository),
 ) -> UserService:
     return UserService(
-        database_session=database_session,
         user_repository=user_repository,
         role_repository=role_repository,
         audit_repository=audit_repository,
@@ -100,12 +110,10 @@ def get_user_service(
 
 
 def get_role_service(
-    database_session: AsyncSession = Depends(get_db),
     role_repository: RoleRepository = Depends(get_role_repository),
     audit_repository: AuditLogRepository = Depends(get_audit_repository),
 ) -> RoleService:
     return RoleService(
-        database_session=database_session,
         role_repository=role_repository,
         audit_repository=audit_repository,
     )
@@ -118,24 +126,53 @@ def get_leave_repository(
 
 
 def get_leave_service(
-    database_session: AsyncSession = Depends(get_db),
     leave_repository: LeaveRepository = Depends(get_leave_repository),
     audit_repository: AuditLogRepository = Depends(get_audit_repository),
 ) -> LeaveService:
     return LeaveService(
-        database_session=database_session,
         leave_repository=leave_repository,
         audit_repository=audit_repository,
     )
 
 
-def get_audit_service(
+def get_project_repository(
     database_session: AsyncSession = Depends(get_db),
+) -> ProjectRepository:
+    return ProjectRepository(database_session)
+
+
+def get_project_service(
+    project_repository: ProjectRepository = Depends(get_project_repository),
+    audit_repository: AuditLogRepository = Depends(get_audit_repository),
+) -> ProjectService:
+    return ProjectService(
+        project_repository=project_repository,
+        audit_repository=audit_repository,
+    )
+
+
+def get_timesheet_repository(
+    database_session: AsyncSession = Depends(get_db),
+) -> TimesheetRepository:
+    return TimesheetRepository(database_session)
+
+
+def get_timesheet_service(
+    project_repository: ProjectRepository = Depends(get_project_repository),
+    timesheet_repository: TimesheetRepository = Depends(get_timesheet_repository),
+    audit_repository: AuditLogRepository = Depends(get_audit_repository),
+) -> TimesheetService:
+    return TimesheetService(
+        project_repository=project_repository,
+        timesheet_repository=timesheet_repository,
+        audit_repository=audit_repository,
+    )
+
+
+def get_audit_service(
     audit_repository: AuditLogRepository = Depends(get_audit_repository),
 ) -> AuditLogService:
-    return AuditLogService(
-        database_session=database_session, audit_repository=audit_repository
-    )
+    return AuditLogService(audit_repository=audit_repository)
 
 
 @lru_cache
@@ -204,17 +241,67 @@ async def get_current_user(
     return user
 
 
+# -----------------------------------------------------------------------------
+# Generic Authorization Helpers
+# -----------------------------------------------------------------------------
+
+
+def is_super_admin(user: User) -> bool:
+    return user.role.name == UserRole.SUPER_ADMIN.value if user.role else False
+
+
+def has_permission(user: User, permission_code: PermissionEnum | str) -> bool:
+    if is_super_admin(user):
+        return True
+    code_str = (
+        permission_code.value if isinstance(permission_code, Enum) else permission_code
+    )
+    user_permissions = (
+        [p.code for p in user.role.permissions]
+        if user.role and user.role.permissions
+        else []
+    )
+    return code_str in user_permissions
+
+
+def has_any_permission(
+    user: User, permission_codes: list[PermissionEnum | str]
+) -> bool:
+    if is_super_admin(user):
+        return True
+    user_permissions = (
+        [p.code for p in user.role.permissions]
+        if user.role and user.role.permissions
+        else []
+    )
+    for p in permission_codes:
+        code_str = p.value if isinstance(p, Enum) else p
+        if code_str in user_permissions:
+            return True
+    return False
+
+
+def has_role(user: User, role_name: UserRole | str) -> bool:
+    if is_super_admin(user):
+        return True
+    role_str = role_name.value if isinstance(role_name, Enum) else role_name
+    user_role_name = user.role.name if user.role else None
+    return user_role_name == role_str
+
+
+def has_any_role(user: User, role_names: list[UserRole | str]) -> bool:
+    if is_super_admin(user):
+        return True
+    user_role_name = user.role.name if user.role else None
+    allowed_names = [
+        role.value if isinstance(role, Enum) else role for role in role_names
+    ]
+    return user_role_name in allowed_names
+
+
 def require_roles(allowed_roles: list[UserRole | str]) -> Callable:
     async def role_checker(current_user: User = Depends(get_current_user)) -> User:
-        allowed_names = [
-            r.value if isinstance(r, UserRole) else str(r) for r in allowed_roles
-        ]
-        user_role_name = current_user.role.name if current_user.role else None
-
-        if (
-            user_role_name not in allowed_names
-            and user_role_name != UserRole.SUPER_ADMIN.value
-        ):
+        if not has_any_role(current_user, allowed_roles):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={
@@ -230,38 +317,48 @@ def require_roles(allowed_roles: list[UserRole | str]) -> Callable:
 def require_permission(
     permission_code: PermissionEnum | str,
 ) -> Callable:
-    target_code = (
-        permission_code.value
-        if isinstance(permission_code, Enum)
-        else str(permission_code)
-    )
-
     async def permission_checker(
         current_user: User = Depends(get_current_user),
     ) -> User:
-        user_role_name = current_user.role.name if current_user.role else None
-
-        # Super admin always has full permissions
-        if user_role_name == UserRole.SUPER_ADMIN.value:
-            return current_user
-
-        user_permissions = (
-            [p.code for p in current_user.role.permissions]
-            if current_user.role and current_user.role.permissions
-            else []
-        )
-
-        if target_code not in user_permissions:
+        if not has_permission(current_user, permission_code):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={
                     "code": "PERMISSION_DENIED",
-                    "message": f"Required permission '{target_code}' is missing.",
+                    "message": "You do not have permission to perform this action.",
                 },
             )
         return current_user
 
     return permission_checker
+
+
+async def get_authorized_target_user_id(
+    requested_user_id: Optional[uuid.UUID],
+    current_user: User,
+    user_repository: Optional[UserRepository] = None,
+    allowed_permissions: Optional[list[PermissionEnum | str]] = None,
+    allowed_roles: Optional[list[UserRole | str]] = None,
+) -> uuid.UUID:
+    if not requested_user_id or requested_user_id == current_user.id:
+        return current_user.id
+
+    global_permissions: list[PermissionEnum | str] = list(
+        allowed_permissions or [PermissionEnum.TIMESHEET_APPROVE]
+    )
+    if has_any_permission(current_user, global_permissions) or has_role(
+        current_user, UserRole.HR_MANAGER
+    ):
+        return requested_user_id
+
+    dept_roles: list[UserRole | str] = list(allowed_roles or [UserRole.DEPARTMENT_LEAD])
+    if has_any_role(current_user, dept_roles):
+        if current_user.department_id and user_repository:
+            target_user = await user_repository.get_by_id(requested_user_id)
+            if target_user and target_user.department_id == current_user.department_id:
+                return requested_user_id
+
+    return current_user.id
 
 
 # -----------------------------------------------------------------------------

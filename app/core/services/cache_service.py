@@ -203,8 +203,9 @@ def cache_response(
 
                 if isinstance(res, Response):
                     status_code = res.status_code
-                    if hasattr(res, "body"):
-                        content = json.loads(res.body.decode("utf-8"))
+                    body_val = getattr(res, "body", None)
+                    if isinstance(body_val, (bytes, bytearray, memoryview)):
+                        content = json.loads(bytes(body_val).decode("utf-8"))
                 elif hasattr(res, "model_dump"):
                     content = res.model_dump(mode="json")
                 elif isinstance(res, (dict, list)):

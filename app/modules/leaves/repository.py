@@ -25,13 +25,13 @@ class LeaveRepository(BaseRepository[LeaveRequest]):
         super().__init__(LeaveRequest, database_session)
 
     async def get_leave_types(self) -> Sequence[LeaveType]:
-        query_result = await self.database_session.execute(select(LeaveType))
+        query_result = await self._database_session.execute(select(LeaveType))
         return query_result.scalars().all()
 
     async def get_leave_type_by_id(
         self, leave_type_id: uuid.UUID
     ) -> Optional[LeaveType]:
-        query_result = await self.database_session.execute(
+        query_result = await self._database_session.execute(
             select(LeaveType).where(LeaveType.id == leave_type_id)
         )
         return query_result.scalar_one_or_none()
@@ -39,7 +39,7 @@ class LeaveRepository(BaseRepository[LeaveRequest]):
     async def get_allocations(
         self, user_id: uuid.UUID, year: int
     ) -> Sequence[LeaveAllocation]:
-        query_result = await self.database_session.execute(
+        query_result = await self._database_session.execute(
             select(LeaveAllocation)
             .options(selectinload(LeaveAllocation.leave_type))
             .where(
@@ -67,12 +67,12 @@ class LeaveRepository(BaseRepository[LeaveRequest]):
         )
         if for_update:
             query = query.with_for_update()
-        query_result = await self.database_session.execute(query)
+        query_result = await self._database_session.execute(query)
         return query_result.scalar_one_or_none()
 
     async def save_allocation(self, allocation: LeaveAllocation) -> LeaveAllocation:
-        self.database_session.add(allocation)
-        await self.database_session.flush()
+        self._database_session.add(allocation)
+        await self._database_session.flush()
         return allocation
 
     async def get_overlapping_requests(
@@ -89,13 +89,13 @@ class LeaveRepository(BaseRepository[LeaveRequest]):
                 & (LeaveRequest.end_date >= end_date),
             ),
         )
-        query_result = await self.database_session.execute(query)
+        query_result = await self._database_session.execute(query)
         return query_result.scalars().all()
 
     async def get_leave_request_with_details(
         self, request_id: uuid.UUID
     ) -> Optional[LeaveRequest]:
-        query_result = await self.database_session.execute(
+        query_result = await self._database_session.execute(
             select(LeaveRequest)
             .options(
                 selectinload(LeaveRequest.user),
@@ -129,17 +129,19 @@ class LeaveRepository(BaseRepository[LeaveRequest]):
             query = query.where(LeaveRequest.end_date <= end_date)
 
         count_query = select(func.count()).select_from(query.subquery())
-        total_records = (await self.database_session.execute(count_query)).scalar() or 0
+        total_records = (
+            await self._database_session.execute(count_query)
+        ).scalar() or 0
 
         query = (
             query.order_by(LeaveRequest.created_at.desc()).offset(offset).limit(limit)
         )
-        records = (await self.database_session.execute(query)).scalars().all()
+        records = (await self._database_session.execute(query)).scalars().all()
         return records, total_records
 
     async def save_approval(self, approval: LeaveApproval) -> LeaveApproval:
-        self.database_session.add(approval)
-        await self.database_session.flush()
+        self._database_session.add(approval)
+        await self._database_session.flush()
         return approval
 
     async def get_company_holidays(
@@ -149,29 +151,29 @@ class LeaveRepository(BaseRepository[LeaveRequest]):
         if year:
             query = query.where(extract("year", CompanyHoliday.holiday_date) == year)
         query = query.order_by(CompanyHoliday.holiday_date.asc())
-        query_result = await self.database_session.execute(query)
+        query_result = await self._database_session.execute(query)
         return query_result.scalars().all()
 
     async def get_holiday_by_date(self, holiday_date: date) -> Optional[CompanyHoliday]:
-        query_result = await self.database_session.execute(
+        query_result = await self._database_session.execute(
             select(CompanyHoliday).where(CompanyHoliday.holiday_date == holiday_date)
         )
         return query_result.scalar_one_or_none()
 
     async def create_holiday(self, holiday: CompanyHoliday) -> CompanyHoliday:
-        self.database_session.add(holiday)
-        await self.database_session.flush()
+        self._database_session.add(holiday)
+        await self._database_session.flush()
         return holiday
 
     async def save_accrual_policy(
         self, policy: LeaveAccrualPolicy
     ) -> LeaveAccrualPolicy:
-        self.database_session.add(policy)
-        await self.database_session.flush()
+        self._database_session.add(policy)
+        await self._database_session.flush()
         return policy
 
     async def get_active_accrual_policies(self) -> Sequence[LeaveAccrualPolicy]:
-        query_result = await self.database_session.execute(
+        query_result = await self._database_session.execute(
             select(LeaveAccrualPolicy)
             .options(selectinload(LeaveAccrualPolicy.leave_type))
             .where(LeaveAccrualPolicy.is_active.is_(True))
@@ -190,11 +192,11 @@ class LeaveRepository(BaseRepository[LeaveRequest]):
         else:
             query = query.where(LeaveAccrualPolicy.designation_id.is_(None))
 
-        query_result = await self.database_session.execute(query)
+        query_result = await self._database_session.execute(query)
         return query_result.scalar_one_or_none()
 
     async def get_active_users(self) -> Sequence[User]:
-        query_result = await self.database_session.execute(
+        query_result = await self._database_session.execute(
             select(User)
             .options(selectinload(User.designation))
             .where(User.is_active.is_(True))
@@ -202,8 +204,8 @@ class LeaveRepository(BaseRepository[LeaveRequest]):
         return query_result.scalars().all()
 
     async def save_audit_log(self, audit_log: AuditLog) -> AuditLog:
-        self.database_session.add(audit_log)
-        await self.database_session.flush()
+        self._database_session.add(audit_log)
+        await self._database_session.flush()
         return audit_log
 
     async def search_audit_logs(
@@ -224,8 +226,10 @@ class LeaveRepository(BaseRepository[LeaveRequest]):
             query = query.where(AuditLog.entity == entity)
 
         count_query = select(func.count()).select_from(query.subquery())
-        total_records = (await self.database_session.execute(count_query)).scalar() or 0
+        total_records = (
+            await self._database_session.execute(count_query)
+        ).scalar() or 0
 
         query = query.order_by(AuditLog.created_at.desc()).offset(offset).limit(limit)
-        records = (await self.database_session.execute(query)).scalars().all()
+        records = (await self._database_session.execute(query)).scalars().all()
         return records, total_records

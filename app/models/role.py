@@ -38,6 +38,10 @@ class PermissionEnum(str, Enum):
     TIMESHEET_SUBMIT = "timesheet:submit"
     TIMESHEET_APPROVE = "timesheet:approve"
 
+    # Projects Module
+    PROJECTS_READ = "projects:read"
+    PROJECTS_WRITE = "projects:write"
+
     # Audit Module
     AUDIT_READ = "audit:read"
 

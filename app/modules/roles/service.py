@@ -2,7 +2,6 @@ import uuid
 from typing import Optional, Sequence
 
 from fastapi import HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.audit import AuditAction, AuditEntity, AuditLog, AuditModule
 from app.models.role import Permission, Role
@@ -14,11 +13,9 @@ from app.modules.roles.schemas import PermissionCreate, RoleCreate, RoleUpdate
 class RoleService:
     def __init__(
         self,
-        database_session: AsyncSession,
         role_repository: RoleRepository,
         audit_repository: Optional[AuditLogRepository] = None,
     ):
-        self._database_session = database_session
         self._role_repo = role_repository
         self._audit_repo = audit_repository
 
@@ -198,8 +195,7 @@ class RoleService:
                 },
             )
 
-        role.is_active = False
-        await self._role_repo.database_session.flush()
+        await self._role_repo.update(role, {"is_active": False})
 
         if self._audit_repo:
             audit = AuditLog(
