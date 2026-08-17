@@ -81,7 +81,7 @@ async def custom_http_exception_handler(request: Request, exc: StarletteHTTPExce
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content=StandardResponse.fail(
             code="VALIDATION_ERROR",
             message="Request payload or parameters failed validation.",
