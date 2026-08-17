@@ -17,6 +17,7 @@ from app.core.services.cache_service import CacheService, cache_response
 from app.models.role import PermissionEnum
 from app.models.user import User
 from app.modules.timesheets.schemas import (
+    TimesheetBatchCreatePayload,
     TimesheetEntryCreatePayload,
     TimesheetEntryRead,
     TimesheetEntryUpdatePayload,
@@ -29,6 +30,25 @@ from app.modules.users.repository import UserRepository
 from app.schemas.common import MetaPayload, StandardResponse
 
 timesheets_router = ProtectedAPIRouter()
+
+
+@timesheets_router.post(
+    "/entries/batch",
+    response_model=StandardResponse[list[TimesheetEntryRead]],
+    status_code=status.HTTP_201_CREATED,
+    response_model_exclude_none=True,
+)
+async def create_timesheet_entries_batch(
+    payload: TimesheetBatchCreatePayload,
+    current_user: User = Depends(require_permission(PermissionEnum.TIMESHEET_SUBMIT)),
+    timesheet_service: TimesheetService = Depends(get_timesheet_service),
+    cache_service: CacheService = Depends(get_cache_service),
+):
+    created_entries = await timesheet_service.create_batch_entries(
+        current_user.id, payload.entries
+    )
+    await cache_service.invalidate_prefixes("timesheet_entries", "timesheet_summary")
+    return StandardResponse.ok(data=created_entries)
 
 
 @timesheets_router.post(
@@ -67,19 +87,47 @@ async def list_timesheet_entries(
     user_repository: UserRepository = Depends(get_user_repository),
     timesheet_service: TimesheetService = Depends(get_timesheet_service),
 ):
-    target_user_id = await get_authorized_target_user_id(
-        user_id, current_user, user_repository
-    )
     offset = (page - 1) * limit
-    entries, total = await timesheet_service.list_entries(
-        user_id=target_user_id,
-        project_id=project_id,
-        start_date=start_date,
-        end_date=end_date,
-        entry_status=entry_status,
-        offset=offset,
-        limit=limit,
-    )
+    if user_id:
+        authorized_user_ids = await user_repository.get_authorized_viewable_user_ids(
+            current_user, user_id
+        )
+        entries, total = await timesheet_service.list_entries(
+            user_id=None,
+            user_ids=authorized_user_ids,
+            project_id=project_id,
+            start_date=start_date,
+            end_date=end_date,
+            entry_status=entry_status,
+            offset=offset,
+            limit=limit,
+        )
+    elif entry_status == "submitted":
+        # Review queue: list submitted entries for assigned reports / department members
+        authorized_user_ids = await user_repository.get_authorized_viewable_user_ids(
+            current_user, None
+        )
+        entries, total = await timesheet_service.list_entries(
+            user_id=None,
+            user_ids=authorized_user_ids,
+            project_id=project_id,
+            start_date=start_date,
+            end_date=end_date,
+            entry_status=entry_status,
+            offset=offset,
+            limit=limit,
+        )
+    else:
+        entries, total = await timesheet_service.list_entries(
+            user_id=current_user.id,
+            user_ids=None,
+            project_id=project_id,
+            start_date=start_date,
+            end_date=end_date,
+            entry_status=entry_status,
+            offset=offset,
+            limit=limit,
+        )
     meta = MetaPayload(page=page, limit=limit, total=total)
     return StandardResponse.ok(data=entries, meta=meta)
 

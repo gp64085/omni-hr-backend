@@ -17,6 +17,7 @@ class TimesheetRepository(BaseRepository[TimesheetEntry]):
     async def list_entries(
         self,
         user_id: Optional[uuid.UUID] = None,
+        user_ids: Optional[list[uuid.UUID]] = None,
         project_id: Optional[uuid.UUID] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
@@ -27,6 +28,8 @@ class TimesheetRepository(BaseRepository[TimesheetEntry]):
         filter_conditions = []
         if user_id:
             filter_conditions.append(TimesheetEntry.user_id == user_id)
+        elif user_ids is not None:
+            filter_conditions.append(TimesheetEntry.user_id.in_(user_ids))
         if project_id:
             filter_conditions.append(TimesheetEntry.project_id == project_id)
         if start_date:

@@ -508,3 +508,142 @@ async def test_department_lead_and_users_read_visibility_isolation():
         )
         assert res_lead_diff.status_code == 200
         assert len(res_lead_diff.json()["data"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_assigned_manager_timesheet_and_leaves_isolation():
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        import uuid
+
+        pwd = get_password_hash("Password123!")
+
+        async with TestingSessionLocal() as session:
+            # Seed permissions
+            res_submit = await session.execute(
+                select(Permission).where(
+                    Permission.code == PermissionEnum.TIMESHEET_SUBMIT.value
+                )
+            )
+            p_submit = res_submit.scalar_one()
+
+            # Seed Manager Role
+            mgr_role = Role(
+                name="ManagerRole",
+                description="Manager with submit permission",
+                permissions=[p_submit],
+            )
+            emp_role = Role(
+                name="ReportEmpRole",
+                description="Report Employee Role",
+                permissions=[p_submit],
+            )
+            session.add_all([mgr_role, emp_role])
+            await session.flush()
+
+            # Create Manager 1
+            mgr1 = User(
+                email="mgr1@omni-hr.com",
+                password_hash=pwd,
+                first_name="Manager",
+                last_name="One",
+                role_id=mgr_role.id,
+                is_active=True,
+            )
+            # Create Manager 2
+            mgr2 = User(
+                email="mgr2@omni-hr.com",
+                password_hash=pwd,
+                first_name="Manager",
+                last_name="Two",
+                role_id=mgr_role.id,
+                is_active=True,
+            )
+            session.add_all([mgr1, mgr2])
+            await session.flush()
+
+            # Create Direct Report 1 assigned to Manager 1
+            report1 = User(
+                email="report1@omni-hr.com",
+                password_hash=pwd,
+                first_name="Report",
+                last_name="One",
+                role_id=emp_role.id,
+                manager_id=mgr1.id,
+                is_active=True,
+            )
+            # Create Direct Report 2 assigned to Manager 2
+            report2 = User(
+                email="report2@omni-hr.com",
+                password_hash=pwd,
+                first_name="Report",
+                last_name="Two",
+                role_id=emp_role.id,
+                manager_id=mgr2.id,
+                is_active=True,
+            )
+            session.add_all([report1, report2])
+            await session.commit()
+
+            report1_id = report1.id
+            report2_id = report2.id
+
+        today_str = str(date.today())
+
+        # Report 1 logs work
+        login_r1 = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "report1@omni-hr.com", "password": "Password123!"},
+        )
+        h_r1 = {"Authorization": f"Bearer {login_r1.json()['data']['access_token']}"}
+        await client.post(
+            "/api/v1/timesheets/entries",
+            json={
+                "work_date": today_str,
+                "hours_spent": 5.0,
+                "is_billable": True,
+                "activity_summary": "Report 1 Task",
+            },
+            headers=h_r1,
+        )
+
+        # Report 2 logs work
+        login_r2 = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "report2@omni-hr.com", "password": "Password123!"},
+        )
+        h_r2 = {"Authorization": f"Bearer {login_r2.json()['data']['access_token']}"}
+        await client.post(
+            "/api/v1/timesheets/entries",
+            json={
+                "work_date": today_str,
+                "hours_spent": 8.0,
+                "is_billable": True,
+                "activity_summary": "Report 2 Task",
+            },
+            headers=h_r2,
+        )
+
+        # Manager 1 logs in
+        login_m1 = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "mgr1@omni-hr.com", "password": "Password123!"},
+        )
+        h_m1 = {"Authorization": f"Bearer {login_m1.json()['data']['access_token']}"}
+
+        # Manager 1 accesses Report 1 (their assigned direct report) -> ALLOWED
+        res_m1_r1 = await client.get(
+            f"/api/v1/timesheets/entries?user_id={report1_id}", headers=h_m1
+        )
+        assert res_m1_r1.status_code == 200
+        assert len(res_m1_r1.json()["data"]) == 1
+        assert res_m1_r1.json()["data"][0]["hours_spent"] == 5.0
+
+        # Manager 1 attempts to access Report 2 (Manager 2's report) -> DENIED (returns own 0 entries)
+        res_m1_r2 = await client.get(
+            f"/api/v1/timesheets/entries?user_id={report2_id}", headers=h_m1
+        )
+        assert res_m1_r2.status_code == 200
+        assert len(res_m1_r2.json()["data"]) == 0
+

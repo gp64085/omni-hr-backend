@@ -9,6 +9,7 @@ from app.api.deps import (
     get_cache_service,
     get_current_user,
     get_leave_service,
+    get_user_repository,
     require_permission,
 )
 from app.core.services.cache_service import CacheService, cache_response
@@ -28,6 +29,7 @@ from app.modules.leaves.schemas import (
     ManualAllocationGrantPayload,
 )
 from app.modules.leaves.service import LeaveService
+from app.modules.users.repository import UserRepository
 from app.schemas.common import MetaPayload, StandardResponse
 
 leaves_router = ProtectedAPIRouter()
@@ -97,22 +99,18 @@ async def list_leave_requests(
     start_date: Optional[date] = Query(None),
     end_date: Optional[date] = Query(None),
     current_user: User = Depends(require_permission(PermissionEnum.LEAVE_READ)),
+    user_repository: UserRepository = Depends(get_user_repository),
     leave_service: LeaveService = Depends(get_leave_service),
 ):
-    # Non-admin/manager roles default to listing their own requests if user_id is omitted
-    filter_user_id = user_id
-    if not filter_user_id and current_user.role:
-        if current_user.role.name not in [
-            "super_admin",
-            "hr_manager",
-            "department_lead",
-        ]:
-            filter_user_id = current_user.id
+    authorized_user_ids = await user_repository.get_authorized_viewable_user_ids(
+        current_user, user_id
+    )
 
     requests, total = await leave_service.list_leave_requests(
         page=page,
         limit=limit,
-        user_id=filter_user_id,
+        user_id=None,
+        user_ids=authorized_user_ids,
         leave_status=leave_status,
         start_date=start_date,
         end_date=end_date,

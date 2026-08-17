@@ -14,6 +14,8 @@ from app.core.services.cache_service import CacheService, cache_response
 from app.models.role import PermissionEnum
 from app.models.user import User
 from app.modules.users.schemas import (
+    DepartmentBase,
+    DesignationBase,
     ProfileResponse,
     ProfileUpdate,
     UserCreate,
@@ -24,6 +26,36 @@ from app.modules.users.service import UserService
 from app.schemas.common import MetaPayload, StandardResponse
 
 router = ProtectedAPIRouter()
+
+
+@router.get(
+    "/departments",
+    response_model=StandardResponse[list[DepartmentBase]],
+    response_model_exclude_none=True,
+)
+@cache_response(ttl_seconds=300, key_prefix="departments_list")
+async def list_departments(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    user_service: UserService = Depends(get_user_service),
+):
+    departments = await user_service.list_departments()
+    return StandardResponse.ok(data=departments)
+
+
+@router.get(
+    "/designations",
+    response_model=StandardResponse[list[DesignationBase]],
+    response_model_exclude_none=True,
+)
+@cache_response(ttl_seconds=300, key_prefix="designations_list")
+async def list_designations(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    user_service: UserService = Depends(get_user_service),
+):
+    designations = await user_service.list_designations()
+    return StandardResponse.ok(data=designations)
 
 
 @router.get(
@@ -77,9 +109,7 @@ async def create_user(
     response_model=StandardResponse[UserResponse],
     response_model_exclude_none=True,
 )
-@cache_response(ttl_seconds=120, key_prefix="users_me")
 async def get_me(
-    request: Request,
     current_user: User = Depends(get_current_user),
     user_service: UserService = Depends(get_user_service),
 ):

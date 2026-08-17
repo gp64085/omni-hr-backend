@@ -119,6 +119,9 @@ async def seed_database():
                 "timesheet",
                 "Approve timesheet entries",
             ),
+            # Projects
+            (PermissionEnum.PROJECTS_READ, "projects", "View assigned projects and assignments"),
+            (PermissionEnum.PROJECTS_WRITE, "projects", "Create, update, and assign projects"),
             # Audit
             (PermissionEnum.AUDIT_READ, "audit", "View system audit logs"),
         ]
@@ -160,6 +163,8 @@ async def seed_database():
                         "payroll:read",
                         "payroll:process",
                         "timesheet:approve",
+                        "projects:read",
+                        "projects:write",
                         "audit:read",
                     ]
                 ],
@@ -177,6 +182,8 @@ async def seed_database():
                         "leave:approve",
                         "timesheet:submit",
                         "timesheet:approve",
+                        "projects:read",
+                        "projects:write",
                     ]
                 ],
             ),
@@ -191,6 +198,7 @@ async def seed_database():
                         "leave:read",
                         "timesheet:submit",
                         "payroll:read",
+                        "projects:read",
                     ]
                 ],
             ),

@@ -13,6 +13,10 @@ class TimesheetEntryCreatePayload(BaseModel):
     activity_summary: str = Field(..., min_length=3)
 
 
+class TimesheetBatchCreatePayload(BaseModel):
+    entries: list[TimesheetEntryCreatePayload]
+
+
 class TimesheetEntryUpdatePayload(BaseModel):
     project_id: Optional[uuid.UUID] = None
     work_date: Optional[date] = None

@@ -86,6 +86,70 @@ class TimesheetService:
         read_dto.project_name = project_name
         return read_dto
 
+    async def create_batch_entries(
+        self, user_id: uuid.UUID, payloads: list[TimesheetEntryCreatePayload]
+    ) -> list[TimesheetEntryRead]:
+        if not payloads:
+            return []
+
+        # Validate total daily hours across payloads
+        date_totals: dict[date, float] = {}
+        for p in payloads:
+            if p.project_id:
+                project = await self._project_repo.get_by_id(p.project_id)
+                if not project or not project.is_active:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="One or more specified projects are invalid or inactive.",
+                    )
+            date_totals[p.work_date] = date_totals.get(p.work_date, 0.0) + float(p.hours_spent)
+
+        for target_date, added_hours in date_totals.items():
+            existing_hours = float(
+                await self._timesheet_repo.get_user_daily_logged_hours(
+                    user_id=user_id, target_date=target_date, for_update=True
+                )
+            )
+            if existing_hours + added_hours > 24.0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Total hours logged for {target_date} would exceed 24 hours. (Already logged: {existing_hours} hrs, attempting to log: {added_hours} hrs)",
+                )
+
+        created_dtos = []
+        for p in payloads:
+            new_entry = TimesheetEntry(
+                user_id=user_id,
+                project_id=p.project_id,
+                work_date=p.work_date,
+                hours_spent=p.hours_spent,
+                is_billable=p.is_billable,
+                activity_summary=p.activity_summary,
+                status="draft",
+            )
+            entry = await self._timesheet_repo.create(new_entry)
+            project_name = None
+            if entry.project_id:
+                proj = await self._project_repo.get_by_id(entry.project_id)
+                if proj:
+                    project_name = proj.name
+
+            dto = TimesheetEntryRead.model_validate(entry)
+            dto.project_name = project_name
+            created_dtos.append(dto)
+
+        audit_entry = AuditLog(
+            user_id=user_id,
+            action=AuditAction.TIMESHEET_CREATE.value,
+            module=AuditModule.TIMESHEETS.value,
+            entity=AuditEntity.TIMESHEET.value,
+            entity_id=None,
+            extra_metadata={"batch_count": len(created_dtos)},
+        )
+        await self._audit_repo.create_log(audit_entry)
+
+        return created_dtos
+
     async def update_entry(
         self,
         user_id: uuid.UUID,
@@ -185,6 +249,7 @@ class TimesheetService:
     async def list_entries(
         self,
         user_id: Optional[uuid.UUID] = None,
+        user_ids: Optional[list[uuid.UUID]] = None,
         project_id: Optional[uuid.UUID] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
@@ -194,6 +259,7 @@ class TimesheetService:
     ) -> tuple[list[TimesheetEntryRead], int]:
         entries, total = await self._timesheet_repo.list_entries(
             user_id=user_id,
+            user_ids=user_ids,
             project_id=project_id,
             start_date=start_date,
             end_date=end_date,

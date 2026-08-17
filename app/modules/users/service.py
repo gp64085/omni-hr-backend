@@ -10,6 +10,8 @@ from app.modules.audit.repository import AuditLogRepository
 from app.modules.roles.repository import RoleRepository
 from app.modules.users.repository import UserRepository
 from app.modules.users.schemas import (
+    DepartmentBase,
+    DesignationBase,
     ProfileResponse,
     ProfileUpdate,
     UserCreate,
@@ -85,6 +87,14 @@ class UserService:
             role_name=role_name,
         )
         return [UserResponse.model_validate(u) for u in users], total
+
+    async def list_departments(self) -> list[DepartmentBase]:
+        departments = await self._user_repo.list_departments()
+        return [DepartmentBase.model_validate(d) for d in departments]
+
+    async def list_designations(self) -> list[DesignationBase]:
+        designations = await self._user_repo.list_designations()
+        return [DesignationBase.model_validate(d) for d in designations]
 
     async def create_user(
         self, payload: UserCreate, requesting_user: Optional[User] = None

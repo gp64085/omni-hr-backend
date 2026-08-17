@@ -3,7 +3,7 @@ from enum import Enum
 from functools import lru_cache
 from typing import Callable, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -186,6 +186,7 @@ def get_cache_service() -> CacheService:
 
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security_scheme),
     user_repository: UserRepository = Depends(get_user_repository),
 ) -> User:
@@ -237,6 +238,9 @@ async def get_current_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "USER_DEACTIVATED", "message": "User account is inactive."},
         )
+
+    request.state.user = user
+    request.state.user_id = str(user.id)
 
     return user
 
@@ -352,10 +356,16 @@ async def get_authorized_target_user_id(
         return requested_user_id
 
     dept_roles: list[UserRole | str] = list(allowed_roles or [UserRole.DEPARTMENT_LEAD])
-    if has_any_role(current_user, dept_roles):
-        if current_user.department_id and user_repository:
-            target_user = await user_repository.get_by_id(requested_user_id)
-            if target_user and target_user.department_id == current_user.department_id:
+    if user_repository:
+        target_user = await user_repository.get_by_id(requested_user_id)
+        if target_user:
+            if target_user.manager_id == current_user.id:
+                return requested_user_id
+            if (
+                has_any_role(current_user, dept_roles)
+                and current_user.department_id
+                and target_user.department_id == current_user.department_id
+            ):
                 return requested_user_id
 
     return current_user.id

@@ -109,6 +109,7 @@ class LeaveRepository(BaseRepository[LeaveRequest]):
         offset: int = 0,
         limit: int = 20,
         user_id: Optional[uuid.UUID] = None,
+        user_ids: Optional[list[uuid.UUID]] = None,
         status: Optional[LeaveStatus] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
@@ -120,6 +121,8 @@ class LeaveRepository(BaseRepository[LeaveRequest]):
 
         if user_id:
             query = query.where(LeaveRequest.user_id == user_id)
+        elif user_ids is not None:
+            query = query.where(LeaveRequest.user_id.in_(user_ids))
         if status:
             query = query.where(LeaveRequest.status == status)
         if start_date:
