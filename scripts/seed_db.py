@@ -119,6 +119,17 @@ async def seed_database():
                 "timesheet",
                 "Approve timesheet entries",
             ),
+            # Projects
+            (
+                PermissionEnum.PROJECTS_READ,
+                "projects",
+                "View assigned projects and assignments",
+            ),
+            (
+                PermissionEnum.PROJECTS_WRITE,
+                "projects",
+                "Create, update, and assign projects",
+            ),
             # Audit
             (PermissionEnum.AUDIT_READ, "audit", "View system audit logs"),
         ]

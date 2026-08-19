@@ -55,7 +55,10 @@ async def setup_test_db():
             p_manage = Permission(
                 code=PermissionEnum.LEAVE_MANAGE_TYPES.value, module="leaves"
             )
-            session.add_all([p_apply, p_read, p_approve, p_manage])
+            p_ts_submit = Permission(
+                code=PermissionEnum.TIMESHEET_SUBMIT.value, module="timesheets"
+            )
+            session.add_all([p_apply, p_read, p_approve, p_manage, p_ts_submit])
             await session.flush()
 
             # Seed System Roles with permissions
@@ -63,13 +66,13 @@ async def setup_test_db():
                 name=UserRole.SUPER_ADMIN.value,
                 description="Super Admin",
                 is_system=True,
-                permissions=[p_apply, p_read, p_approve, p_manage],
+                permissions=[p_apply, p_read, p_approve, p_manage, p_ts_submit],
             )
             emp_role = Role(
                 name=UserRole.EMPLOYEE.value,
                 description="Employee",
                 is_system=True,
-                permissions=[p_apply, p_read],
+                permissions=[p_apply, p_read, p_ts_submit],
             )
             session.add_all([admin_role, emp_role])
             await session.flush()
@@ -371,3 +374,55 @@ async def test_accrual_policy_creation_and_manual_grant():
         actions = [log["action"] for log in audit_logs]
         assert "MANUAL_LEAVE_GRANT" in actions
         assert "PERIODIC_LEAVE_ACCRUAL" in actions
+
+
+@pytest.mark.asyncio
+async def test_leave_rejected_when_timesheet_exists_on_date():
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        login_res = await ac.post(
+            "/api/v1/auth/login",
+            json={"email": "emp_leave@omnihr.com", "password": "EmpPass123!"},
+        )
+        token = login_res.json()["data"]["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        types_res = await ac.get("/api/v1/leaves/types", headers=headers)
+        casual_type_id = next(
+            t["id"] for t in types_res.json()["data"] if t["name"] == "casual"
+        )
+
+        today = date.today()
+
+        # 1. Log a timesheet for today
+        ts_res = await ac.post(
+            "/api/v1/timesheets/entries",
+            headers=headers,
+            json={
+                "work_date": today.isoformat(),
+                "hours_spent": 4.0,
+                "activity_summary": [
+                    {
+                        "project_name": "Internal Project",
+                        "tasks": [{"summary": "Daily tasks", "hours": 4.0}],
+                    }
+                ],
+            },
+        )
+        assert ts_res.status_code == 201
+
+        # 2. Attempt to apply leave for today (should fail 409)
+        leave_res = await ac.post(
+            "/api/v1/leaves/requests",
+            headers=headers,
+            json={
+                "leave_type_id": casual_type_id,
+                "start_date": today.isoformat(),
+                "end_date": today.isoformat(),
+                "reason": "Doctor appointment",
+            },
+        )
+        assert leave_res.status_code == 409
+        body = leave_res.json()
+        assert body["error"]["code"] == "TIMESHEET_ALREADY_EXISTS_FOR_DATE"

@@ -3,7 +3,17 @@ import uuid
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import UUID, Boolean, Date, DateTime, ForeignKey, Integer, Numeric, Text
+from sqlalchemy import (
+    JSON,
+    UUID,
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    Text,
+)
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -148,6 +158,7 @@ class LeaveRequest(Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    extra_metadata: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

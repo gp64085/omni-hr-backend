@@ -5,7 +5,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.user import EmployeeProfile, RefreshToken, User
+from app.models.user import EmployeeProfile, RefreshToken, User, UserRole
 from app.repositories.base import BaseRepository
 
 
@@ -112,3 +112,53 @@ class UserRepository(BaseRepository[User]):
         self._database_session.add(profile)
         await self._database_session.flush()
         return profile
+
+    async def get_authorized_viewable_user_ids(
+        self, current_user: User, requested_user_id: Optional[uuid.UUID] = None
+    ) -> Optional[list[uuid.UUID]]:
+
+        role_name = current_user.role.name if current_user.role else ""
+        if role_name in [UserRole.SUPER_ADMIN.value, UserRole.HR_MANAGER.value]:
+            if requested_user_id:
+                return [requested_user_id]
+            return None
+
+        # Fetch direct subordinates where manager_id == current_user.id
+        sub_query = select(User.id).where(User.manager_id == current_user.id)
+        sub_res = await self._database_session.execute(sub_query)
+        subordinate_ids = set(sub_res.scalars().all())
+
+        # If Department Lead, also include members of their department
+        if role_name == UserRole.DEPARTMENT_LEAD.value and current_user.department_id:
+            dept_query = select(User.id).where(
+                User.department_id == current_user.department_id
+            )
+            dept_res = await self._database_session.execute(dept_query)
+            subordinate_ids.update(dept_res.scalars().all())
+
+        # Always include the user's own id
+        subordinate_ids.add(current_user.id)
+
+        if requested_user_id:
+            if requested_user_id in subordinate_ids:
+                return [requested_user_id]
+            # Not authorized to view requested user -> restrict to own user id
+            return [current_user.id]
+
+        return list(subordinate_ids)
+
+    async def get_user_ids_by_role_names(
+        self, role_names: list[str]
+    ) -> list[uuid.UUID]:
+        from app.models.role import Role
+
+        query = (
+            select(User.id)
+            .join(User.role)
+            .where(
+                User.is_active.is_(True),
+                Role.name.in_(role_names),
+            )
+        )
+        res = await self._database_session.execute(query)
+        return list(res.scalars().all())

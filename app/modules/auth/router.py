@@ -1,7 +1,12 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 
-from app.api.deps import ProtectedAPIRouter, get_auth_service, get_current_user
-from app.core.services.cache_service import cache_response
+from app.api.deps import (
+    ProtectedAPIRouter,
+    get_auth_service,
+    get_cache_service,
+    get_current_user,
+)
+from app.core.services.cache_service import CacheService
 from app.models.user import User
 from app.modules.auth.schemas import LoginRequest, RefreshTokenRequest, TokenResponse
 from app.modules.auth.service import AuthService
@@ -45,8 +50,12 @@ async def logout(
     payload: RefreshTokenRequest,
     current_user: User = Depends(get_current_user),
     auth_service: AuthService = Depends(get_auth_service),
+    cache_service: CacheService = Depends(get_cache_service),
 ):
     await auth_service.logout(str(current_user.id), payload.refresh_token)
+    await cache_service.invalidate_prefixes(
+        "auth_me", "users_me", f"user:{current_user.id}"
+    )
     return StandardResponse.ok(data={"message": "Logged out successfully."})
 
 
@@ -55,9 +64,7 @@ async def logout(
     response_model=StandardResponse[UserResponse],
     response_model_exclude_none=True,
 )
-@cache_response(ttl_seconds=120, key_prefix="auth_me")
 async def get_current_user_profile(
-    request: Request,
     current_user: User = Depends(get_current_user),
 ):
     return StandardResponse.ok(data=UserResponse.model_validate(current_user))

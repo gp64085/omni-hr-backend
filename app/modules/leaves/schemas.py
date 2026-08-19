@@ -56,12 +56,14 @@ class LeaveAllocationRead(BaseModel):
     used_days: float
     comp_off_credits: float
     remaining_days: float = 0.0
+    pending_days: float = 0.0
+    scheduled_future_days: float = 0.0
     last_accrual_date: Optional[date] = None
     model_config = ConfigDict(from_attributes=True)
 
 
 class LeaveRequestCreate(BaseModel):
-    leave_type_id: uuid.UUID
+    leave_type_id: Optional[uuid.UUID] = None
     start_date: date
     end_date: date
     half_day_type: HalfDayType = HalfDayType.NONE
@@ -91,6 +93,7 @@ class LeaveRequestRead(BaseModel):
     reason: Optional[str] = None
     approver_id: Optional[uuid.UUID] = None
     rejection_reason: Optional[str] = None
+    extra_metadata: Optional[dict] = None
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
@@ -99,6 +102,8 @@ class LeaveStatusUpdatePayload(BaseModel):
     status: LeaveStatus
     rejection_reason: Optional[str] = None
     comments: Optional[str] = None
+    approved_dates: Optional[list[date]] = None
+    rejected_dates: Optional[list[date]] = None
 
 
 class HolidayCreatePayload(BaseModel):

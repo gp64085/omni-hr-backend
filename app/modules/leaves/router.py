@@ -2,13 +2,14 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from fastapi import Depends, Query, Request, status
+from fastapi import Depends, HTTPException, Query, Request, status
 
 from app.api.deps import (
     ProtectedAPIRouter,
     get_cache_service,
     get_current_user,
     get_leave_service,
+    get_user_repository,
     require_permission,
 )
 from app.core.services.cache_service import CacheService, cache_response
@@ -28,6 +29,7 @@ from app.modules.leaves.schemas import (
     ManualAllocationGrantPayload,
 )
 from app.modules.leaves.service import LeaveService
+from app.modules.users.repository import UserRepository
 from app.schemas.common import MetaPayload, StandardResponse
 
 leaves_router = ProtectedAPIRouter()
@@ -98,27 +100,69 @@ async def list_leave_requests(
     end_date: Optional[date] = Query(None),
     current_user: User = Depends(require_permission(PermissionEnum.LEAVE_READ)),
     leave_service: LeaveService = Depends(get_leave_service),
+    user_repository: UserRepository = Depends(get_user_repository),
 ):
-    # Non-admin/manager roles default to listing their own requests if user_id is omitted
-    filter_user_id = user_id
-    if not filter_user_id and current_user.role:
-        if current_user.role.name not in [
-            "super_admin",
-            "hr_manager",
-            "department_lead",
-        ]:
-            filter_user_id = current_user.id
+    if user_id:
+        authorized_user_ids = await user_repository.get_authorized_viewable_user_ids(
+            current_user, user_id
+        )
+        exclude_user_id = None
+    elif leave_status == LeaveStatus.PENDING:
+        viewable_user_ids = await user_repository.get_authorized_viewable_user_ids(
+            current_user, None
+        )
+        if viewable_user_ids is not None:
+            authorized_user_ids = [
+                uid for uid in viewable_user_ids if uid != current_user.id
+            ]
+        else:
+            authorized_user_ids = None
+        exclude_user_id = current_user.id
+    else:
+        authorized_user_ids = [current_user.id]
+        exclude_user_id = None
 
     requests, total = await leave_service.list_leave_requests(
         page=page,
         limit=limit,
-        user_id=filter_user_id,
+        user_id=None,
+        user_ids=authorized_user_ids,
+        exclude_user_id=exclude_user_id,
         leave_status=leave_status,
         start_date=start_date,
         end_date=end_date,
     )
     meta = MetaPayload(page=page, limit=limit, total=total)
     return StandardResponse.ok(data=requests, meta=meta)
+
+
+@leaves_router.get(
+    "/requests/{id}",
+    response_model=StandardResponse[LeaveRequestRead],
+    response_model_exclude_none=True,
+)
+async def get_leave_request(
+    id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    user_repository: UserRepository = Depends(get_user_repository),
+    leave_service: LeaveService = Depends(get_leave_service),
+):
+    leave_request = await leave_service.get_leave_request(id)
+    if not leave_request:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Leave request not found.",
+        )
+    if leave_request.user_id != current_user.id:
+        viewable = await user_repository.get_authorized_viewable_user_ids(
+            current_user, leave_request.user_id
+        )
+        if viewable is not None and leave_request.user_id not in viewable:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to view this leave request.",
+            )
+    return StandardResponse.ok(data=leave_request)
 
 
 @leaves_router.patch(
@@ -208,6 +252,26 @@ async def trigger_accruals_manually(
     return StandardResponse.ok(
         data={
             "message": f"Periodic accruals processed successfully. Updated {accrued_count} allocations."
+        }
+    )
+
+
+@leaves_router.post(
+    "/reconcile",
+    response_model=StandardResponse[dict],
+    response_model_exclude_none=True,
+)
+async def reconcile_leaves_manually(
+    target_date: Optional[date] = Query(None),
+    current_user: User = Depends(require_permission(PermissionEnum.LEAVE_MANAGE_TYPES)),
+    leave_service: LeaveService = Depends(get_leave_service),
+    cache_service: CacheService = Depends(get_cache_service),
+):
+    settled_count = await leave_service.settle_daily_leaves(target_date)
+    await cache_service.invalidate_prefixes("leave_balance", "leave_requests")
+    return StandardResponse.ok(
+        data={
+            "message": f"Leave reconciliation completed. Settled {settled_count} leave requests."
         }
     )
 

@@ -11,6 +11,7 @@ from app.models.leave import (
     LeaveType,
     LeaveTypeEnum,
 )
+from app.models.notification import Notification, NotificationType
 from app.models.organization import Department, Designation
 from app.models.payroll import PayRun, PayRunStatus, Payslip, SalaryStructure
 from app.models.role import Permission, Role, role_permissions
@@ -48,4 +49,6 @@ __all__ = [
     "AuditModule",
     "AuditEntity",
     "AuditAction",
+    "Notification",
+    "NotificationType",
 ]
