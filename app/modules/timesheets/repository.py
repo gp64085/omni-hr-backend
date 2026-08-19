@@ -72,19 +72,19 @@ class TimesheetRepository(BaseRepository[Timesheet]):
         )
         return query_result.scalar_one_or_none()
 
-    async def get_user_daily_logged_hours(
+    async def get_user_daily_logged_minutes(
         self,
         user_id: uuid.UUID,
         target_date: date,
         exclude_entry_id: Optional[uuid.UUID] = None,
         for_update: bool = False,
-    ) -> float:
+    ) -> int:
         if for_update:
             await self._database_session.execute(
                 select(User.id).where(User.id == user_id).with_for_update()
             )
 
-        query = select(func.coalesce(func.sum(Timesheet.hours_spent), 0)).where(
+        query = select(func.coalesce(func.sum(Timesheet.total_minutes_spent), 0)).where(
             Timesheet.user_id == user_id,
             Timesheet.work_date == target_date,
         )
@@ -92,8 +92,23 @@ class TimesheetRepository(BaseRepository[Timesheet]):
             query = query.where(Timesheet.id != exclude_entry_id)
 
         query_result = await self._database_session.execute(query)
-        total_hours = query_result.scalar()
-        return float(total_hours or 0.0)
+        total_mins = query_result.scalar()
+        return total_mins or 0
+
+    async def get_user_daily_logged_hours(
+        self,
+        user_id: uuid.UUID,
+        target_date: date,
+        exclude_entry_id: Optional[uuid.UUID] = None,
+        for_update: bool = False,
+    ) -> float:
+        total_mins = await self.get_user_daily_logged_minutes(
+            user_id=user_id,
+            target_date=target_date,
+            exclude_entry_id=exclude_entry_id,
+            for_update=for_update,
+        )
+        return round(total_mins / 60.0, 2)
 
     async def bulk_update_status(
         self,
