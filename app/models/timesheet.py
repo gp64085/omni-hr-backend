@@ -3,6 +3,7 @@ from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import (
+    JSON,
     UUID,
     Boolean,
     Column,
@@ -59,8 +60,8 @@ class Project(Base):
     )
 
 
-class TimesheetEntry(Base):
-    __tablename__ = "timesheet_entries"
+class Timesheet(Base):
+    __tablename__ = "timesheets"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -74,10 +75,10 @@ class TimesheetEntry(Base):
         nullable=True,
     )
     work_date: Mapped[date] = mapped_column(Date, nullable=False)
-    hours_spent: Mapped[float] = mapped_column(Numeric(4, 2), nullable=False)
+    hours_spent: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
     is_billable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    activity_summary: Mapped[str] = mapped_column(Text, nullable=False)
-    status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)
+    activity_summary: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="submitted", nullable=False)
     approver_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -90,3 +91,7 @@ class TimesheetEntry(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+
+
+# Alias for backward-compatible references
+TimesheetEntry = Timesheet

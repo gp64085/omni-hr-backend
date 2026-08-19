@@ -21,6 +21,12 @@ class PermissionCreate(BaseModel):
     description: Optional[str] = Field(None, max_length=255)
 
 
+class PermissionUpdate(BaseModel):
+    code: Optional[str] = Field(None, min_length=2, max_length=100)
+    module: Optional[str] = Field(None, min_length=2, max_length=50)
+    description: Optional[str] = Field(None, max_length=255)
+
+
 class RoleRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

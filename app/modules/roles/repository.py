@@ -124,8 +124,24 @@ class RoleRepository(BaseRepository[Role]):
         )
         return query_result.scalar_one_or_none()
 
+    async def get_permission_by_id(
+        self, permission_id: uuid.UUID
+    ) -> Optional[Permission]:
+        query_result = await self._database_session.execute(
+            select(Permission).where(Permission.id == permission_id)
+        )
+        return query_result.scalar_one_or_none()
+
     async def create_permission(self, permission: Permission) -> Permission:
         self._database_session.add(permission)
+        await self._database_session.flush()
+        return permission
+
+    async def update_permission(
+        self, permission: Permission, updates: dict
+    ) -> Permission:
+        for field, value in updates.items():
+            setattr(permission, field, value)
         await self._database_session.flush()
         return permission
 

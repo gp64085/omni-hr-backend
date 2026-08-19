@@ -151,22 +151,14 @@ async def test_timesheets_and_projects_flow():
         entry_data = entry_res.json()["data"]
         entry_id = entry_data["id"]
         assert entry_data["hours_spent"] == 8.0
-        assert entry_data["status"] == "draft"
+        assert entry_data["status"] == "submitted"
 
         # 5. List Timesheet Entries
         list_res = await client.get("/api/v1/timesheets/entries", headers=emp_headers)
         assert list_res.status_code == 200
         assert len(list_res.json()["data"]) >= 1
 
-        # 6. Submit Timesheet Entries for range
-        submit_res = await client.post(
-            "/api/v1/timesheets/submit",
-            json={"start_date": today_str, "end_date": today_str},
-            headers=emp_headers,
-        )
-        assert submit_res.status_code == 200
-
-        # 7. Approve Entry as Admin/Manager
+        # 6. Approve Entry as Admin/Manager (entry is directly submitted on creation)
         approve_res = await client.patch(
             f"/api/v1/timesheets/entries/{entry_id}/status",
             json={"status": "approved"},
@@ -211,38 +203,21 @@ async def test_timesheet_status_transition_and_rejection_reason():
 
         today_str = str(date.today())
 
-        # Create draft entry
+        # Create submitted entry directly
         res_create = await client.post(
             "/api/v1/timesheets/entries",
             json={
                 "work_date": today_str,
                 "hours_spent": 4.0,
                 "is_billable": True,
-                "activity_summary": "Draft Entry Test",
+                "activity_summary": "Daily Work Test",
             },
             headers=emp_headers,
         )
         assert res_create.status_code == 201
-        entry_id = res_create.json()["data"]["id"]
-
-        # Attempt to approve draft entry directly -> Expect 400
-        res_invalid = await client.patch(
-            f"/api/v1/timesheets/entries/{entry_id}/status",
-            json={"status": "approved"},
-            headers=admin_headers,
-        )
-        assert res_invalid.status_code == 400
-        assert (
-            "Only submitted timesheet entries can be approved or rejected"
-            in res_invalid.json()["error"]["message"]
-        )
-
-        # Submit entry
-        await client.post(
-            "/api/v1/timesheets/submit",
-            json={"start_date": today_str, "end_date": today_str},
-            headers=emp_headers,
-        )
+        entry_data = res_create.json()["data"]
+        assert entry_data["status"] == "submitted"
+        entry_id = entry_data["id"]
 
         # Reject entry with rejection_reason -> Expect 200 and rejection_reason persisted
         res_reject = await client.patch(
@@ -254,6 +229,41 @@ async def test_timesheet_status_transition_and_rejection_reason():
         data_reject = res_reject.json()["data"]
         assert data_reject["status"] == "rejected"
         assert data_reject["rejection_reason"] == "Incomplete activity logs"
+
+        # Attempt self-approval as Admin for own entry -> Expect 400
+        admin_entry_res = await client.post(
+            "/api/v1/timesheets/entries",
+            json={
+                "work_date": today_str,
+                "hours_spent": 2.0,
+                "is_billable": True,
+                "activity_summary": "Admin Work Log",
+            },
+            headers=admin_headers,
+        )
+        assert admin_entry_res.status_code == 201
+        admin_entry_id = admin_entry_res.json()["data"]["id"]
+
+        # Approvals queue for Admin should not contain admin's own entry
+        review_res = await client.get(
+            "/api/v1/timesheets/entries?status=submitted",
+            headers=admin_headers,
+        )
+        assert review_res.status_code == 200
+        review_entry_ids = [e["id"] for e in review_res.json()["data"]]
+        assert admin_entry_id not in review_entry_ids
+
+        # Attempting self-approval returns 400
+        self_approve_res = await client.patch(
+            f"/api/v1/timesheets/entries/{admin_entry_id}/status",
+            json={"status": "approved"},
+            headers=admin_headers,
+        )
+        assert self_approve_res.status_code == 400
+        assert (
+            "cannot approve or reject your own timesheet"
+            in self_approve_res.json()["error"]["message"]
+        )
 
 
 @pytest.mark.asyncio
@@ -508,3 +518,139 @@ async def test_department_lead_and_users_read_visibility_isolation():
         )
         assert res_lead_diff.status_code == 200
         assert len(res_lead_diff.json()["data"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_assigned_manager_timesheet_and_leaves_isolation():
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        pwd = get_password_hash("Password123!")
+
+        async with TestingSessionLocal() as session:
+            # Seed permissions
+            res_submit = await session.execute(
+                select(Permission).where(
+                    Permission.code == PermissionEnum.TIMESHEET_SUBMIT.value
+                )
+            )
+            p_submit = res_submit.scalar_one()
+
+            # Seed Manager Role
+            mgr_role = Role(
+                name="ManagerRole",
+                description="Manager with submit permission",
+                permissions=[p_submit],
+            )
+            emp_role = Role(
+                name="ReportEmpRole",
+                description="Report Employee Role",
+                permissions=[p_submit],
+            )
+            session.add_all([mgr_role, emp_role])
+            await session.flush()
+
+            # Create Manager 1
+            mgr1 = User(
+                email="mgr1@omni-hr.com",
+                password_hash=pwd,
+                first_name="Manager",
+                last_name="One",
+                role_id=mgr_role.id,
+                is_active=True,
+            )
+            # Create Manager 2
+            mgr2 = User(
+                email="mgr2@omni-hr.com",
+                password_hash=pwd,
+                first_name="Manager",
+                last_name="Two",
+                role_id=mgr_role.id,
+                is_active=True,
+            )
+            session.add_all([mgr1, mgr2])
+            await session.flush()
+
+            # Create Direct Report 1 assigned to Manager 1
+            report1 = User(
+                email="report1@omni-hr.com",
+                password_hash=pwd,
+                first_name="Report",
+                last_name="One",
+                role_id=emp_role.id,
+                manager_id=mgr1.id,
+                is_active=True,
+            )
+            # Create Direct Report 2 assigned to Manager 2
+            report2 = User(
+                email="report2@omni-hr.com",
+                password_hash=pwd,
+                first_name="Report",
+                last_name="Two",
+                role_id=emp_role.id,
+                manager_id=mgr2.id,
+                is_active=True,
+            )
+            session.add_all([report1, report2])
+            await session.commit()
+
+            report1_id = report1.id
+            report2_id = report2.id
+
+        today_str = str(date.today())
+
+        # Report 1 logs work
+        login_r1 = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "report1@omni-hr.com", "password": "Password123!"},
+        )
+        h_r1 = {"Authorization": f"Bearer {login_r1.json()['data']['access_token']}"}
+        await client.post(
+            "/api/v1/timesheets/entries",
+            json={
+                "work_date": today_str,
+                "hours_spent": 5.0,
+                "is_billable": True,
+                "activity_summary": "Report 1 Task",
+            },
+            headers=h_r1,
+        )
+
+        # Report 2 logs work
+        login_r2 = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "report2@omni-hr.com", "password": "Password123!"},
+        )
+        h_r2 = {"Authorization": f"Bearer {login_r2.json()['data']['access_token']}"}
+        await client.post(
+            "/api/v1/timesheets/entries",
+            json={
+                "work_date": today_str,
+                "hours_spent": 8.0,
+                "is_billable": True,
+                "activity_summary": "Report 2 Task",
+            },
+            headers=h_r2,
+        )
+
+        # Manager 1 logs in
+        login_m1 = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "mgr1@omni-hr.com", "password": "Password123!"},
+        )
+        h_m1 = {"Authorization": f"Bearer {login_m1.json()['data']['access_token']}"}
+
+        # Manager 1 accesses Report 1 (their assigned direct report) -> ALLOWED
+        res_m1_r1 = await client.get(
+            f"/api/v1/timesheets/entries?user_id={report1_id}", headers=h_m1
+        )
+        assert res_m1_r1.status_code == 200
+        assert len(res_m1_r1.json()["data"]) == 1
+        assert res_m1_r1.json()["data"][0]["hours_spent"] == 5.0
+
+        # Manager 1 attempts to access Report 2 (Manager 2's report) -> DENIED (returns own 0 entries)
+        res_m1_r2 = await client.get(
+            f"/api/v1/timesheets/entries?user_id={report2_id}", headers=h_m1
+        )
+        assert res_m1_r2.status_code == 200
+        assert len(res_m1_r2.json()["data"]) == 0

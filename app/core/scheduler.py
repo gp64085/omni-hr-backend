@@ -43,16 +43,20 @@ async def _run_midnight_accrual_loop():
                         updated_count = await service.trigger_periodic_accruals(
                             target_date=current_date
                         )
+                        settled_leaves_count = await service.settle_daily_leaves(
+                            target_date=current_date
+                        )
                         await session.commit()
 
                         logger.info(
-                            "Midnight Periodic Accrual completed for date %s: %d allocations updated.",
+                            "Midnight Job completed for date %s: %d allocations accrued, %d leaves settled.",
                             current_date,
                             updated_count,
+                            settled_leaves_count,
                         )
                 else:
                     logger.info(
-                        "Midnight Periodic Accrual for date %s is already locked/processed by another process.",
+                        "Midnight Job for date %s is already locked/processed by another process.",
                         current_date,
                     )
 

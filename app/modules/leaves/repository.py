@@ -109,6 +109,8 @@ class LeaveRepository(BaseRepository[LeaveRequest]):
         offset: int = 0,
         limit: int = 20,
         user_id: Optional[uuid.UUID] = None,
+        user_ids: Optional[list[uuid.UUID]] = None,
+        exclude_user_id: Optional[uuid.UUID] = None,
         status: Optional[LeaveStatus] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
@@ -120,6 +122,10 @@ class LeaveRepository(BaseRepository[LeaveRequest]):
 
         if user_id:
             query = query.where(LeaveRequest.user_id == user_id)
+        elif user_ids is not None:
+            query = query.where(LeaveRequest.user_id.in_(user_ids))
+        if exclude_user_id:
+            query = query.where(LeaveRequest.user_id != exclude_user_id)
         if status:
             query = query.where(LeaveRequest.status == status)
         if start_date:
@@ -137,6 +143,50 @@ class LeaveRepository(BaseRepository[LeaveRequest]):
         )
         records = (await self._database_session.execute(query)).scalars().all()
         return records, total_records
+
+    async def get_user_requests_for_year(
+        self, user_id: uuid.UUID, year: int
+    ) -> Sequence[LeaveRequest]:
+        query = select(LeaveRequest).where(
+            LeaveRequest.user_id == user_id,
+            extract("year", LeaveRequest.start_date) == year,
+            LeaveRequest.status.in_([LeaveStatus.PENDING, LeaveStatus.APPROVED]),
+        )
+        query_result = await self._database_session.execute(query)
+        return query_result.scalars().all()
+
+    async def get_unsettled_approved_requests(
+        self, cutoff_date: date, year: int
+    ) -> Sequence[LeaveRequest]:
+        query = (
+            select(LeaveRequest)
+            .options(
+                selectinload(LeaveRequest.leave_type),
+                selectinload(LeaveRequest.user),
+            )
+            .where(
+                LeaveRequest.status == LeaveStatus.APPROVED,
+                LeaveRequest.start_date <= cutoff_date,
+                extract("year", LeaveRequest.start_date) == year,
+            )
+        )
+        query_result = await self._database_session.execute(query)
+        records = query_result.scalars().all()
+        # Filter out already settled records
+        unsettled = [
+            r
+            for r in records
+            if not (r.extra_metadata and r.extra_metadata.get("settled") is True)
+        ]
+        return unsettled
+
+    async def save_request(self, request: LeaveRequest) -> LeaveRequest:
+        from sqlalchemy.orm.attributes import flag_modified
+
+        flag_modified(request, "extra_metadata")
+        self._database_session.add(request)
+        await self._database_session.flush()
+        return request
 
     async def save_approval(self, approval: LeaveApproval) -> LeaveApproval:
         self._database_session.add(approval)

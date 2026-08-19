@@ -3,7 +3,7 @@ from enum import Enum
 from functools import lru_cache
 from typing import Callable, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +21,8 @@ from app.modules.audit.service import AuditLogService
 from app.modules.auth.service import AuthService
 from app.modules.leaves.repository import LeaveRepository
 from app.modules.leaves.service import LeaveService
+from app.modules.notifications.repository import NotificationRepository
+from app.modules.notifications.service import NotificationService
 from app.modules.projects.repository import ProjectRepository
 from app.modules.projects.service import ProjectService
 from app.modules.roles.repository import RoleRepository
@@ -38,6 +40,7 @@ __all__ = [
     "get_user_repository",
     "get_role_repository",
     "get_leave_repository",
+    "get_notification_repository",
     "get_audit_repository",
     "get_project_repository",
     "get_timesheet_repository",
@@ -45,6 +48,7 @@ __all__ = [
     "get_user_service",
     "get_role_service",
     "get_leave_service",
+    "get_notification_service",
     "get_project_service",
     "get_timesheet_service",
     "get_audit_service",
@@ -125,13 +129,43 @@ def get_leave_repository(
     return LeaveRepository(database_session)
 
 
+def get_timesheet_repository(
+    database_session: AsyncSession = Depends(get_db),
+) -> TimesheetRepository:
+    return TimesheetRepository(database_session)
+
+
+def get_notification_repository(
+    database_session: AsyncSession = Depends(get_db),
+) -> NotificationRepository:
+    return NotificationRepository(database_session)
+
+
+def get_notification_service(
+    notification_repository: NotificationRepository = Depends(
+        get_notification_repository
+    ),
+    user_repository: UserRepository = Depends(get_user_repository),
+) -> NotificationService:
+    return NotificationService(
+        notification_repository=notification_repository,
+        user_repository=user_repository,
+    )
+
+
 def get_leave_service(
     leave_repository: LeaveRepository = Depends(get_leave_repository),
     audit_repository: AuditLogRepository = Depends(get_audit_repository),
+    timesheet_repository: TimesheetRepository = Depends(get_timesheet_repository),
+    notification_service: NotificationService = Depends(get_notification_service),
+    user_repository: UserRepository = Depends(get_user_repository),
 ) -> LeaveService:
     return LeaveService(
         leave_repository=leave_repository,
         audit_repository=audit_repository,
+        timesheet_repository=timesheet_repository,
+        notification_service=notification_service,
+        user_repository=user_repository,
     )
 
 
@@ -151,21 +185,19 @@ def get_project_service(
     )
 
 
-def get_timesheet_repository(
-    database_session: AsyncSession = Depends(get_db),
-) -> TimesheetRepository:
-    return TimesheetRepository(database_session)
-
-
 def get_timesheet_service(
     project_repository: ProjectRepository = Depends(get_project_repository),
     timesheet_repository: TimesheetRepository = Depends(get_timesheet_repository),
     audit_repository: AuditLogRepository = Depends(get_audit_repository),
+    notification_service: NotificationService = Depends(get_notification_service),
+    user_repository: UserRepository = Depends(get_user_repository),
 ) -> TimesheetService:
     return TimesheetService(
         project_repository=project_repository,
         timesheet_repository=timesheet_repository,
         audit_repository=audit_repository,
+        notification_service=notification_service,
+        user_repository=user_repository,
     )
 
 
@@ -186,6 +218,7 @@ def get_cache_service() -> CacheService:
 
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security_scheme),
     user_repository: UserRepository = Depends(get_user_repository),
 ) -> User:
@@ -237,6 +270,10 @@ async def get_current_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "USER_DEACTIVATED", "message": "User account is inactive."},
         )
+
+    # Attach to request state so middleware, audit loggers, and cache services can read the user
+    request.state.user = user
+    request.state.user_id = user.id
 
     return user
 

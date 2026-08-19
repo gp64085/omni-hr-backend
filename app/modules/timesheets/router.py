@@ -21,7 +21,6 @@ from app.modules.timesheets.schemas import (
     TimesheetEntryRead,
     TimesheetEntryUpdatePayload,
     TimesheetStatusUpdatePayload,
-    TimesheetSubmitPayload,
     WeeklyTimesheetSummaryRead,
 )
 from app.modules.timesheets.service import TimesheetService
@@ -67,19 +66,67 @@ async def list_timesheet_entries(
     user_repository: UserRepository = Depends(get_user_repository),
     timesheet_service: TimesheetService = Depends(get_timesheet_service),
 ):
-    target_user_id = await get_authorized_target_user_id(
-        user_id, current_user, user_repository
-    )
+    await get_authorized_target_user_id(user_id, current_user, user_repository)
     offset = (page - 1) * limit
-    entries, total = await timesheet_service.list_entries(
-        user_id=target_user_id,
-        project_id=project_id,
-        start_date=start_date,
-        end_date=end_date,
-        entry_status=entry_status,
-        offset=offset,
-        limit=limit,
-    )
+    if user_id:
+        authorized_user_ids = await user_repository.get_authorized_viewable_user_ids(
+            current_user, user_id
+        )
+        entries, total = await timesheet_service.list_entries(
+            user_id=None,
+            user_ids=authorized_user_ids,
+            project_id=project_id,
+            start_date=start_date,
+            end_date=end_date,
+            entry_status=entry_status,
+            offset=offset,
+            limit=limit,
+        )
+    elif entry_status == "submitted":
+        authorized_user_ids = await user_repository.get_authorized_viewable_user_ids(
+            current_user, None
+        )
+        if authorized_user_ids is not None:
+            filtered_user_ids = [
+                uid for uid in authorized_user_ids if uid != current_user.id
+            ]
+            if not filtered_user_ids:
+                entries, total = [], 0
+            else:
+                entries, total = await timesheet_service.list_entries(
+                    user_id=None,
+                    user_ids=filtered_user_ids,
+                    exclude_user_id=current_user.id,
+                    project_id=project_id,
+                    start_date=start_date,
+                    end_date=end_date,
+                    entry_status=entry_status,
+                    offset=offset,
+                    limit=limit,
+                )
+        else:
+            entries, total = await timesheet_service.list_entries(
+                user_id=None,
+                user_ids=None,
+                exclude_user_id=current_user.id,
+                project_id=project_id,
+                start_date=start_date,
+                end_date=end_date,
+                entry_status=entry_status,
+                offset=offset,
+                limit=limit,
+            )
+    else:
+        entries, total = await timesheet_service.list_entries(
+            user_id=current_user.id,
+            user_ids=None,
+            project_id=project_id,
+            start_date=start_date,
+            end_date=end_date,
+            entry_status=entry_status,
+            offset=offset,
+            limit=limit,
+        )
     meta = MetaPayload(page=page, limit=limit, total=total)
     return StandardResponse.ok(data=entries, meta=meta)
 
@@ -118,26 +165,6 @@ async def delete_timesheet_entry(
     await cache_service.invalidate_prefixes("timesheet_entries", "timesheet_summary")
     return StandardResponse.ok(
         data={"message": "Timesheet entry deleted successfully."}
-    )
-
-
-@timesheets_router.post(
-    "/submit",
-    response_model=StandardResponse[dict],
-    response_model_exclude_none=True,
-)
-async def submit_timesheets(
-    payload: TimesheetSubmitPayload,
-    current_user: User = Depends(require_permission(PermissionEnum.TIMESHEET_SUBMIT)),
-    timesheet_service: TimesheetService = Depends(get_timesheet_service),
-    cache_service: CacheService = Depends(get_cache_service),
-):
-    submitted_count = await timesheet_service.submit_timesheets(
-        current_user.id, payload
-    )
-    await cache_service.invalidate_prefixes("timesheet_entries", "timesheet_summary")
-    return StandardResponse.ok(
-        data={"message": f"Successfully submitted {submitted_count} timesheet entries."}
     )
 
 

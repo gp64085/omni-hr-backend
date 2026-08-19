@@ -77,9 +77,7 @@ async def create_user(
     response_model=StandardResponse[UserResponse],
     response_model_exclude_none=True,
 )
-@cache_response(ttl_seconds=120, key_prefix="users_me")
 async def get_me(
-    request: Request,
     current_user: User = Depends(get_current_user),
     user_service: UserService = Depends(get_user_service),
 ):

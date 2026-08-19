@@ -16,6 +16,7 @@ from app.models.user import User
 from app.modules.roles.schemas import (
     PermissionCreate,
     PermissionRead,
+    PermissionUpdate,
     RoleCreate,
     RoleRead,
     RoleUpdate,
@@ -103,6 +104,28 @@ async def create_permission(
     created_permission = await role_service.create_permission(perm_in)
     await cache_service.invalidate_prefixes("permissions_list", "permissions")
     return PermissionRead.model_validate(created_permission)
+
+
+@permissions_router.put(
+    "/{permission_id}",
+    response_model=PermissionRead,
+    dependencies=[Depends(require_permission(PermissionEnum.ROLES_WRITE))],
+    response_model_exclude_none=True,
+)
+async def update_permission(
+    permission_id: uuid.UUID,
+    perm_in: PermissionUpdate,
+    current_user: User = Depends(get_current_user),
+    role_service: RoleService = Depends(get_role_service),
+    cache_service: CacheService = Depends(get_cache_service),
+) -> PermissionRead:
+    updated_permission = await role_service.update_permission(
+        permission_id, perm_in, user_id=current_user.id
+    )
+    await cache_service.invalidate_prefixes(
+        "permissions_list", "permissions", "role_permissions", "roles"
+    )
+    return PermissionRead.model_validate(updated_permission)
 
 
 @roles_router.post(

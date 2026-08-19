@@ -7,7 +7,12 @@ from app.models.audit import AuditAction, AuditEntity, AuditLog, AuditModule
 from app.models.role import Permission, Role
 from app.modules.audit.repository import AuditLogRepository
 from app.modules.roles.repository import RoleRepository
-from app.modules.roles.schemas import PermissionCreate, RoleCreate, RoleUpdate
+from app.modules.roles.schemas import (
+    PermissionCreate,
+    PermissionUpdate,
+    RoleCreate,
+    RoleUpdate,
+)
 
 
 class RoleService:
@@ -84,6 +89,55 @@ class RoleService:
             description=perm_in.description,
         )
         return await self._role_repo.create_permission(perm)
+
+    async def update_permission(
+        self,
+        permission_id: uuid.UUID,
+        update_body: PermissionUpdate,
+        user_id: Optional[uuid.UUID] = None,
+    ) -> Permission:
+        permission = await self._role_repo.get_permission_by_id(permission_id)
+        if not permission:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "PERMISSION_NOT_FOUND",
+                    "message": "Permission not found.",
+                },
+            )
+
+        if update_body.code and update_body.code != permission.code:
+            existing = await self._role_repo.get_permission_by_code(update_body.code)
+            if existing and existing.id != permission_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "code": "PERMISSION_ALREADY_EXISTS",
+                        "message": f"Permission code '{update_body.code}' already exists.",
+                    },
+                )
+            permission.code = update_body.code
+
+        if update_body.module is not None:
+            permission.module = update_body.module
+
+        if update_body.description is not None:
+            permission.description = update_body.description
+
+        await self._role_repo.update_permission(permission, {})
+
+        if self._audit_repo:
+            audit = AuditLog(
+                user_id=user_id,
+                module=AuditModule.ROLES.value,
+                action=AuditAction.ROLE_UPDATE.value,
+                entity=AuditEntity.PERMISSION.value,
+                entity_id=permission_id,
+                extra_metadata={"permission_code": permission.code},
+            )
+            await self._audit_repo.create_log(audit)
+
+        return permission
 
     async def get_role(self, role_id: uuid.UUID) -> Role:
         role = await self._role_repo.get_with_permissions(role_id)

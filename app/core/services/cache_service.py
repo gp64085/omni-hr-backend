@@ -136,17 +136,31 @@ def cache_response(
 
             prefix = key_prefix or func.__name__
 
+            # Extract current authenticated user context from kwargs, request.state, or args
+            current_user_obj = kwargs.get("current_user")
+            if not current_user_obj and request:
+                state = getattr(request, "state", None)
+                current_user_obj = getattr(state, "user", None) or getattr(
+                    state, "user_id", None
+                )
+            if not current_user_obj:
+                for arg in args:
+                    if hasattr(arg, "id") and hasattr(arg, "email"):
+                        current_user_obj = arg
+                        break
+
+            user_id = (
+                getattr(current_user_obj, "id", current_user_obj)
+                if current_user_obj
+                else None
+            )
+            user_prefix = f":user:{user_id}" if user_id else ""
+
             if request:
                 query_str = str(request.query_params)
                 state = getattr(request, "state", None)
                 tenant_id = getattr(state, "tenant_id", None)
-                user_val = getattr(state, "user_id", None) or getattr(
-                    state, "user", None
-                )
-                user_id = getattr(user_val, "id", user_val) if user_val else None
-
                 tenant_prefix = f":tenant:{tenant_id}" if tenant_id else ""
-                user_prefix = f":user:{user_id}" if user_id else ""
                 cache_key = f"route_cache:{prefix}{tenant_prefix}{user_prefix}:{request.url.path}:{query_str}"
             else:
                 # Build cache key from parameters and extract identity from non-primitive objects
