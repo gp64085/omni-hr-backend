@@ -160,9 +160,11 @@ async def test_timesheet_7_day_window_and_single_endpoint():
         # 1. Reject logging timesheet older than 7 days
         payload_old = {
             "work_date": older_than_7_days.isoformat(),
-            "hours_spent": 8.0,
+            "total_minutes_spent": 480,
             "is_billable": True,
-            "activity_summary": [{"summary": "Past work", "hours": 8.0}],
+            "activity_summary": [
+                {"tasks": [{"summary": "Past work", "hours": 8, "minutes": 0}]}
+            ],
         }
         res_old = await client.post(
             "/api/v1/timesheets/entries",
@@ -176,9 +178,11 @@ async def test_timesheet_7_day_window_and_single_endpoint():
         future_date = today + timedelta(days=1)
         payload_future = {
             "work_date": future_date.isoformat(),
-            "hours_spent": 8.0,
+            "total_minutes_spent": 480,
             "is_billable": True,
-            "activity_summary": [{"summary": "Future work", "hours": 8.0}],
+            "activity_summary": [
+                {"tasks": [{"summary": "Future work", "hours": 8, "minutes": 0}]}
+            ],
         }
         res_future = await client.post(
             "/api/v1/timesheets/entries",
@@ -191,15 +195,15 @@ async def test_timesheet_7_day_window_and_single_endpoint():
         # 3. Allow logging timesheet within 7 days
         payload_valid = {
             "work_date": today.isoformat(),
-            "hours_spent": 7.5,
+            "total_minutes_spent": 450,
             "is_billable": True,
             "activity_summary": [
                 {
                     "tasks": [
-                        {"summary": "Feature work", "hours": 5.0, "minutes": 0},
-                        {"summary": "Code review", "hours": 2.5, "minutes": 0},
+                        {"summary": "Feature work", "hours": 5, "minutes": 0},
+                        {"summary": "Code review", "hours": 2, "minutes": 30},
                     ],
-                    "total_hours": 7.5,
+                    "total_minutes_spent": 450,
                 }
             ],
         }
@@ -209,7 +213,7 @@ async def test_timesheet_7_day_window_and_single_endpoint():
             headers=headers,
         )
         assert res_valid.status_code == 201
-        assert res_valid.json()["data"]["hours_spent"] == 7.5
+        assert res_valid.json()["data"]["total_minutes_spent"] == 450
 
 
 @pytest.mark.asyncio

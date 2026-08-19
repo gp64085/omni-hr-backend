@@ -15,7 +15,7 @@ from app.models.notification import Notification, NotificationType
 from app.models.organization import Department, Designation
 from app.models.payroll import PayRun, PayRunStatus, Payslip, SalaryStructure
 from app.models.role import Permission, Role, role_permissions
-from app.models.timesheet import Project, TimesheetEntry, project_departments
+from app.models.timesheet import Project, Timesheet, project_departments
 from app.models.user import EmployeeProfile, RefreshToken, User, UserRole
 
 __all__ = [
@@ -39,7 +39,7 @@ __all__ = [
     "HalfDayType",
     "Project",
     "project_departments",
-    "TimesheetEntry",
+    "Timesheet",
     "SalaryStructure",
     "PayRun",
     "Payslip",

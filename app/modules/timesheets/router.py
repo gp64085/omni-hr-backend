@@ -68,65 +68,16 @@ async def list_timesheet_entries(
 ):
     await get_authorized_target_user_id(user_id, current_user, user_repository)
     offset = (page - 1) * limit
-    if user_id:
-        authorized_user_ids = await user_repository.get_authorized_viewable_user_ids(
-            current_user, user_id
-        )
-        entries, total = await timesheet_service.list_entries(
-            user_id=None,
-            user_ids=authorized_user_ids,
-            project_id=project_id,
-            start_date=start_date,
-            end_date=end_date,
-            entry_status=entry_status,
-            offset=offset,
-            limit=limit,
-        )
-    elif entry_status == "submitted":
-        authorized_user_ids = await user_repository.get_authorized_viewable_user_ids(
-            current_user, None
-        )
-        if authorized_user_ids is not None:
-            filtered_user_ids = [
-                uid for uid in authorized_user_ids if uid != current_user.id
-            ]
-            if not filtered_user_ids:
-                entries, total = [], 0
-            else:
-                entries, total = await timesheet_service.list_entries(
-                    user_id=None,
-                    user_ids=filtered_user_ids,
-                    exclude_user_id=current_user.id,
-                    project_id=project_id,
-                    start_date=start_date,
-                    end_date=end_date,
-                    entry_status=entry_status,
-                    offset=offset,
-                    limit=limit,
-                )
-        else:
-            entries, total = await timesheet_service.list_entries(
-                user_id=None,
-                user_ids=None,
-                exclude_user_id=current_user.id,
-                project_id=project_id,
-                start_date=start_date,
-                end_date=end_date,
-                entry_status=entry_status,
-                offset=offset,
-                limit=limit,
-            )
-    else:
-        entries, total = await timesheet_service.list_entries(
-            user_id=current_user.id,
-            user_ids=None,
-            project_id=project_id,
-            start_date=start_date,
-            end_date=end_date,
-            entry_status=entry_status,
-            offset=offset,
-            limit=limit,
-        )
+    entries, total = await timesheet_service.list_user_or_team_entries(
+        current_user=current_user,
+        requested_user_id=user_id,
+        project_id=project_id,
+        start_date=start_date,
+        end_date=end_date,
+        entry_status=entry_status,
+        offset=offset,
+        limit=limit,
+    )
     meta = MetaPayload(page=page, limit=limit, total=total)
     return StandardResponse.ok(data=entries, meta=meta)
 

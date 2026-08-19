@@ -401,11 +401,11 @@ async def test_leave_rejected_when_timesheet_exists_on_date():
             headers=headers,
             json={
                 "work_date": today.isoformat(),
-                "hours_spent": 4.0,
+                "total_minutes_spent": 240,
                 "activity_summary": [
                     {
                         "project_name": "Internal Project",
-                        "tasks": [{"summary": "Daily tasks", "hours": 4.0}],
+                        "tasks": [{"summary": "Daily tasks", "hours": 4, "minutes": 0}],
                     }
                 ],
             },

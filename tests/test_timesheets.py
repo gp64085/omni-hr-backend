@@ -141,16 +141,29 @@ async def test_timesheets_and_projects_flow():
             json={
                 "project_id": project_id,
                 "work_date": today_str,
-                "hours_spent": 8.0,
+                "total_minutes_spent": 480,
                 "is_billable": True,
-                "activity_summary": "Developed Timesheet module API endpoints",
+                "activity_summary": [
+                    {
+                        "project_id": project_id,
+                        "project_name": "OmniHR Core Engine",
+                        "tasks": [
+                            {
+                                "summary": "Developed Timesheet module API endpoints",
+                                "hours": 8,
+                                "minutes": 0,
+                                "formatted_time": "08:00",
+                            }
+                        ],
+                    }
+                ],
             },
             headers=emp_headers,
         )
         assert entry_res.status_code == 201
         entry_data = entry_res.json()["data"]
         entry_id = entry_data["id"]
-        assert entry_data["hours_spent"] == 8.0
+        assert entry_data["total_minutes_spent"] == 480
         assert entry_data["status"] == "submitted"
 
         # 5. List Timesheet Entries
@@ -174,8 +187,7 @@ async def test_timesheets_and_projects_flow():
         )
         assert summary_res.status_code == 200
         summary_data = summary_res.json()["data"]
-        assert summary_data["total_hours"] == 8.0
-        assert summary_data["billable_hours"] == 8.0
+        assert summary_data["total_minutes_spent"] == 480
         assert summary_data["entries_count"] == 1
 
 
@@ -208,9 +220,21 @@ async def test_timesheet_status_transition_and_rejection_reason():
             "/api/v1/timesheets/entries",
             json={
                 "work_date": today_str,
-                "hours_spent": 4.0,
+                "total_minutes_spent": 240,
                 "is_billable": True,
-                "activity_summary": "Daily Work Test",
+                "activity_summary": [
+                    {
+                        "project_name": "Daily Work",
+                        "tasks": [
+                            {
+                                "summary": "Daily Work Test",
+                                "hours": 4,
+                                "minutes": 0,
+                                "formatted_time": "04:00",
+                            }
+                        ],
+                    }
+                ],
             },
             headers=emp_headers,
         )
@@ -230,40 +254,74 @@ async def test_timesheet_status_transition_and_rejection_reason():
         assert data_reject["status"] == "rejected"
         assert data_reject["rejection_reason"] == "Incomplete activity logs"
 
-        # Attempt self-approval as Admin for own entry -> Expect 400
+        # Employee edits their rejected entry -> Expect 200, status transitions back to "submitted", and rejection_reason is cleared
+        res_edit_rejected = await client.put(
+            f"/api/v1/timesheets/entries/{entry_id}",
+            json={
+                "total_minutes_spent": 300,
+                "activity_summary": [
+                    {
+                        "project_name": "Daily Work",
+                        "tasks": [
+                            {
+                                "summary": "Updated Activity Logs with detailed breakdown",
+                                "hours": 5,
+                                "minutes": 0,
+                                "formatted_time": "05:00",
+                            }
+                        ],
+                    }
+                ],
+            },
+            headers=emp_headers,
+        )
+        assert res_edit_rejected.status_code == 200
+        data_edited = res_edit_rejected.json()["data"]
+        assert data_edited["status"] == "submitted"
+        assert data_edited.get("rejection_reason") is None
+        assert data_edited["total_minutes_spent"] == 300
         admin_entry_res = await client.post(
             "/api/v1/timesheets/entries",
             json={
                 "work_date": today_str,
-                "hours_spent": 2.0,
+                "total_minutes_spent": 120,
                 "is_billable": True,
-                "activity_summary": "Admin Work Log",
+                "activity_summary": [
+                    {
+                        "project_name": "Admin Tasks",
+                        "tasks": [
+                            {
+                                "summary": "Admin Work Log",
+                                "hours": 2,
+                                "minutes": 0,
+                                "formatted_time": "02:00",
+                            }
+                        ],
+                    }
+                ],
             },
             headers=admin_headers,
         )
         assert admin_entry_res.status_code == 201
         admin_entry_id = admin_entry_res.json()["data"]["id"]
 
-        # Approvals queue for Admin should not contain admin's own entry
+        # Super Admin can view all submitted entries in the approval queue
         review_res = await client.get(
             "/api/v1/timesheets/entries?status=submitted",
             headers=admin_headers,
         )
         assert review_res.status_code == 200
         review_entry_ids = [e["id"] for e in review_res.json()["data"]]
-        assert admin_entry_id not in review_entry_ids
+        assert admin_entry_id in review_entry_ids
 
-        # Attempting self-approval returns 400
+        # Super Admin can approve any timesheet (including own or any employee)
         self_approve_res = await client.patch(
             f"/api/v1/timesheets/entries/{admin_entry_id}/status",
             json={"status": "approved"},
             headers=admin_headers,
         )
-        assert self_approve_res.status_code == 400
-        assert (
-            "cannot approve or reject your own timesheet"
-            in self_approve_res.json()["error"]["message"]
-        )
+        assert self_approve_res.status_code == 200
+        assert self_approve_res.json()["data"]["status"] == "approved"
 
 
 @pytest.mark.asyncio
@@ -292,33 +350,57 @@ async def test_timesheet_visibility_policy_for_user_id():
 
         today_str = str(date.today())
 
-        # Employee creates an entry (5.0 hrs)
+        # Employee creates an entry (5.0 hrs / 300 mins)
         res_emp_entry = await client.post(
             "/api/v1/timesheets/entries",
             json={
                 "work_date": today_str,
-                "hours_spent": 5.0,
+                "total_minutes_spent": 300,
                 "is_billable": True,
-                "activity_summary": "Employee Work",
+                "activity_summary": [
+                    {
+                        "project_name": "General",
+                        "tasks": [
+                            {
+                                "summary": "Employee Work",
+                                "hours": 5,
+                                "minutes": 0,
+                                "formatted_time": "05:00",
+                            }
+                        ],
+                    }
+                ],
             },
             headers=emp_headers,
         )
         assert res_emp_entry.status_code == 201
 
-        # Admin creates an entry (7.0 hrs)
+        # Admin creates an entry (7.0 hrs / 420 mins)
         res_admin_entry = await client.post(
             "/api/v1/timesheets/entries",
             json={
                 "work_date": today_str,
-                "hours_spent": 7.0,
+                "total_minutes_spent": 420,
                 "is_billable": True,
-                "activity_summary": "Admin Work",
+                "activity_summary": [
+                    {
+                        "project_name": "General",
+                        "tasks": [
+                            {
+                                "summary": "Admin Work",
+                                "hours": 7,
+                                "minutes": 0,
+                                "formatted_time": "07:00",
+                            }
+                        ],
+                    }
+                ],
             },
             headers=admin_headers,
         )
         assert res_admin_entry.status_code == 201
 
-        # 1. Employee attempts to query Admin's entries via user_id -> should be ignored, returning Employee's 5.0 hr entry
+        # 1. Employee attempts to query Admin's entries via user_id -> should be ignored, returning Employee's 300 min entry
         res_emp_peek = await client.get(
             f"/api/v1/timesheets/entries?user_id={admin_id}",
             headers=emp_headers,
@@ -326,18 +408,18 @@ async def test_timesheet_visibility_policy_for_user_id():
         assert res_emp_peek.status_code == 200
         entries_peek = res_emp_peek.json()["data"]
         assert len(entries_peek) == 1
-        assert entries_peek[0]["hours_spent"] == 5.0
+        assert entries_peek[0]["total_minutes_spent"] == 300
 
-        # 2. Employee attempts to query Admin's summary via user_id -> should be ignored, returning Employee's 5.0 hr summary
+        # 2. Employee attempts to query Admin's summary via user_id -> should be ignored, returning Employee's 300 min summary
         res_emp_summary_peek = await client.get(
             f"/api/v1/timesheets/summary?start_date={today_str}&end_date={today_str}&user_id={admin_id}",
             headers=emp_headers,
         )
         assert res_emp_summary_peek.status_code == 200
         summary_peek = res_emp_summary_peek.json()["data"]
-        assert summary_peek["total_hours"] == 5.0
+        assert summary_peek["total_minutes_spent"] == 300
 
-        # 3. Admin queries Employee's entries via user_id -> authorized, returning Employee's 5.0 hr entry
+        # 3. Admin queries Employee's entries via user_id -> authorized, returning Employee's 300 min entry
         res_admin_query = await client.get(
             f"/api/v1/timesheets/entries?user_id={emp_id}",
             headers=admin_headers,
@@ -345,7 +427,7 @@ async def test_timesheet_visibility_policy_for_user_id():
         assert res_admin_query.status_code == 200
         entries_admin_query = res_admin_query.json()["data"]
         assert len(entries_admin_query) == 1
-        assert entries_admin_query[0]["hours_spent"] == 5.0
+        assert entries_admin_query[0]["total_minutes_spent"] == 300
 
 
 @pytest.mark.asyncio
@@ -459,9 +541,21 @@ async def test_department_lead_and_users_read_visibility_isolation():
             "/api/v1/timesheets/entries",
             json={
                 "work_date": today_str,
-                "hours_spent": 4.0,
+                "total_minutes_spent": 240,
                 "is_billable": True,
-                "activity_summary": "Task E1",
+                "activity_summary": [
+                    {
+                        "project_name": "Dept1 Project",
+                        "tasks": [
+                            {
+                                "summary": "Task E1",
+                                "hours": 4,
+                                "minutes": 0,
+                                "formatted_time": "04:00",
+                            }
+                        ],
+                    }
+                ],
             },
             headers=h_e1,
         )
@@ -476,9 +570,21 @@ async def test_department_lead_and_users_read_visibility_isolation():
             "/api/v1/timesheets/entries",
             json={
                 "work_date": today_str,
-                "hours_spent": 6.0,
+                "total_minutes_spent": 360,
                 "is_billable": True,
-                "activity_summary": "Task E2",
+                "activity_summary": [
+                    {
+                        "project_name": "Dept2 Project",
+                        "tasks": [
+                            {
+                                "summary": "Task E2",
+                                "hours": 6,
+                                "minutes": 0,
+                                "formatted_time": "06:00",
+                            }
+                        ],
+                    }
+                ],
             },
             headers=h_e2,
         )
@@ -510,7 +616,7 @@ async def test_department_lead_and_users_read_visibility_isolation():
         )
         assert res_lead_same.status_code == 200
         assert len(res_lead_same.json()["data"]) == 1
-        assert res_lead_same.json()["data"][0]["hours_spent"] == 4.0
+        assert res_lead_same.json()["data"][0]["total_minutes_spent"] == 240
 
         # 3. Dept Lead attempts to access Emp 2 (different dept) -> DENIED (returns Lead's own 0 entries)
         res_lead_diff = await client.get(
@@ -609,9 +715,21 @@ async def test_assigned_manager_timesheet_and_leaves_isolation():
             "/api/v1/timesheets/entries",
             json={
                 "work_date": today_str,
-                "hours_spent": 5.0,
+                "total_minutes_spent": 300,
                 "is_billable": True,
-                "activity_summary": "Report 1 Task",
+                "activity_summary": [
+                    {
+                        "project_name": "Report1 Project",
+                        "tasks": [
+                            {
+                                "summary": "Report 1 Task",
+                                "hours": 5,
+                                "minutes": 0,
+                                "formatted_time": "05:00",
+                            }
+                        ],
+                    }
+                ],
             },
             headers=h_r1,
         )
@@ -626,9 +744,21 @@ async def test_assigned_manager_timesheet_and_leaves_isolation():
             "/api/v1/timesheets/entries",
             json={
                 "work_date": today_str,
-                "hours_spent": 8.0,
+                "total_minutes_spent": 480,
                 "is_billable": True,
-                "activity_summary": "Report 2 Task",
+                "activity_summary": [
+                    {
+                        "project_name": "Report2 Project",
+                        "tasks": [
+                            {
+                                "summary": "Report 2 Task",
+                                "hours": 8,
+                                "minutes": 0,
+                                "formatted_time": "08:00",
+                            }
+                        ],
+                    }
+                ],
             },
             headers=h_r2,
         )
@@ -646,7 +776,7 @@ async def test_assigned_manager_timesheet_and_leaves_isolation():
         )
         assert res_m1_r1.status_code == 200
         assert len(res_m1_r1.json()["data"]) == 1
-        assert res_m1_r1.json()["data"][0]["hours_spent"] == 5.0
+        assert res_m1_r1.json()["data"][0]["total_minutes_spent"] == 300
 
         # Manager 1 attempts to access Report 2 (Manager 2's report) -> DENIED (returns own 0 entries)
         res_m1_r2 = await client.get(

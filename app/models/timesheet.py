@@ -10,7 +10,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
-    Numeric,
+    Integer,
     String,
     Table,
     Text,
@@ -75,7 +75,9 @@ class Timesheet(Base):
         nullable=True,
     )
     work_date: Mapped[date] = mapped_column(Date, nullable=False)
-    hours_spent: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
+    total_minutes_spent: Mapped[int] = mapped_column(
+        Integer, server_default="0", default=0, nullable=False
+    )
     is_billable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     activity_summary: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="submitted", nullable=False)
@@ -91,7 +93,3 @@ class Timesheet(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
-
-
-# Alias for backward-compatible references
-TimesheetEntry = Timesheet

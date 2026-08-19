@@ -6,10 +6,13 @@ from fastapi import HTTPException, status
 
 from app.models.audit import AuditAction, AuditEntity, AuditLog, AuditModule
 from app.models.timesheet import Timesheet
+from app.models.user import User, UserRole
 from app.modules.audit.repository import AuditLogRepository
+from app.modules.notifications.service import NotificationService
 from app.modules.projects.repository import ProjectRepository
 from app.modules.timesheets.repository import TimesheetRepository
 from app.modules.timesheets.schemas import (
+    ProjectAllocationSchema,
     TimesheetEntryCreatePayload,
     TimesheetEntryRead,
     TimesheetEntryUpdatePayload,
@@ -17,6 +20,7 @@ from app.modules.timesheets.schemas import (
     TimesheetSubmitPayload,
     WeeklyTimesheetSummaryRead,
 )
+from app.modules.users.repository import UserRepository
 
 
 class TimesheetService:
@@ -25,8 +29,8 @@ class TimesheetService:
         project_repository: ProjectRepository,
         timesheet_repository: TimesheetRepository,
         audit_repository: AuditLogRepository,
-        notification_service: Optional[Any] = None,
-        user_repository: Optional[Any] = None,
+        notification_service: Optional[NotificationService] = None,
+        user_repository: Optional[UserRepository] = None,
     ):
         self._project_repo = project_repository
         self._timesheet_repo = timesheet_repository
@@ -34,161 +38,277 @@ class TimesheetService:
         self._notif_service = notification_service
         self._user_repo = user_repository
 
-    async def _normalize_activity_summary(
-        self, summary_raw: Any, hours_spent: Optional[float] = None
-    ) -> tuple[Any, float]:
-        if not summary_raw:
-            final_h = round(float(hours_spent or 0.0), 2)
-            return [], final_h
+    def _is_super_admin(self, user: Optional[User]) -> bool:
+        if not user or not user.role:
+            return False
+        return user.role.name in [UserRole.SUPER_ADMIN.value, "super_admin"]
 
-        if isinstance(summary_raw, str):
-            final_h = round(float(hours_spent or 0.0), 2)
-            return summary_raw, final_h
-
-        if not isinstance(summary_raw, list):
-            final_h = round(float(hours_spent or 0.0), 2)
-            return summary_raw, final_h
-
-        normalized = []
-        computed_hours = 0.0
-
-        for item in summary_raw:
-            if not isinstance(item, dict):
-                continue
-            item_dict = dict(item)
-
-            if "tasks" in item_dict and isinstance(item_dict["tasks"], list):
-                norm_tasks = []
-                proj_hours = 0.0
-                for t in item_dict["tasks"]:
-                    if not isinstance(t, dict):
-                        continue
-                    t_dict = dict(t)
-                    t_hrs = float(t_dict.get("hours", 0.0) or 0.0)
-                    t_mins = int(t_dict.get("minutes", 0) or 0)
-                    if t_mins and not t_hrs:
-                        t_hrs = t_mins / 60.0
-                    elif t_mins:
-                        t_hrs = t_hrs + (t_mins / 60.0)
-                    t_dict["hours"] = round(t_hrs, 2)
-                    proj_hours += t_hrs
-                    norm_tasks.append(t_dict)
-
-                item_dict["tasks"] = norm_tasks
-                item_dict["total_hours"] = round(proj_hours, 2)
-                computed_hours += proj_hours
-            else:
-                t_hrs = float(
-                    item_dict.get("hours", 0.0)
-                    or item_dict.get("hours_spent", 0.0)
-                    or 0.0
-                )
-                computed_hours += t_hrs
-
-            normalized.append(item_dict)
-
-        final_hours = (
-            float(hours_spent)
-            if hours_spent is not None and hours_spent > 0
-            else round(computed_hours, 2)
-        )
-        return normalized, final_hours
-
-    async def create_entry(
-        self, user_id: uuid.UUID, payload: TimesheetEntryCreatePayload
-    ) -> TimesheetEntryRead:
-        if payload.work_date > date.today():
+    def _validate_creation_dates_and_minutes(
+        self, work_date: date, total_minutes: int
+    ) -> None:
+        today = date.today()
+        if work_date > today:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot log timesheet for future dates.",
             )
-
-        if payload.work_date < date.today() - timedelta(days=7):
+        if work_date < today - timedelta(days=7):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot log timesheet for dates older than 7 days.",
             )
+        if total_minutes <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Timesheet duration must be greater than 0 minutes.",
+            )
+        if total_minutes > 24 * 60:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Total duration logged for a single day cannot exceed 24 hours (1440 minutes).",
+            )
 
-        normalized_summary, total_hours = await self._normalize_activity_summary(
-            payload.activity_summary, payload.hours_spent
+    async def _normalize_activity_summary(
+        self,
+        summary_raw: list[ProjectAllocationSchema],
+        minutes_spent: Optional[int] = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        default_mins = (
+            minutes_spent if minutes_spent is not None and minutes_spent > 0 else 0
         )
 
-        if total_hours <= 0:
+        if not summary_raw or not isinstance(summary_raw, list):
+            return [], default_mins
+
+        normalized: list[dict[str, Any]] = []
+        computed_minutes = 0
+
+        for item in summary_raw:
+            if hasattr(item, "model_dump"):
+                item_dict = item.model_dump(mode="json")
+            elif isinstance(item, dict):
+                item_dict = dict(item)
+            else:
+                continue
+
+            if "tasks" in item_dict and isinstance(item_dict["tasks"], list):
+                norm_tasks: list[dict[str, Any]] = []
+                proj_minutes = 0
+                for task in item_dict["tasks"]:
+                    if hasattr(task, "model_dump"):
+                        task_dict = task.model_dump(mode="json")
+                    elif isinstance(task, dict):
+                        task_dict = dict(task)
+                    else:
+                        continue
+
+                    raw_hours = float(task_dict.get("hours", 0.0) or 0.0)
+                    raw_minutes = int(task_dict.get("minutes", 0) or 0)
+                    formatted_time = task_dict.get("formatted_time")
+
+                    if (
+                        formatted_time
+                        and isinstance(formatted_time, str)
+                        and ":" in formatted_time
+                    ):
+                        parts = formatted_time.split(":")
+                        try:
+                            task_hours = int(parts[0])
+                            task_minutes = int(parts[1])
+                        except ValueError:
+                            task_hours = int(raw_hours)
+                            task_minutes = raw_minutes
+                    elif raw_hours % 1 != 0:
+                        task_total_minutes = round(raw_hours * 60)
+                        task_hours = task_total_minutes // 60
+                        task_minutes = task_total_minutes % 60
+                    else:
+                        task_hours = int(raw_hours)
+                        task_minutes = raw_minutes
+
+                    task_minutes_spent = task_hours * 60 + task_minutes
+                    task_dict["hours"] = task_hours
+                    task_dict["minutes"] = task_minutes
+                    task_dict["formatted_time"] = f"{task_hours:02d}:{task_minutes:02d}"
+                    proj_minutes += task_minutes_spent
+                    norm_tasks.append(task_dict)
+
+                item_dict["tasks"] = norm_tasks
+                item_dict["total_minutes_spent"] = proj_minutes
+                item_dict.pop("total_hours", None)
+                computed_minutes += proj_minutes
+            else:
+                computed_minutes += int(item_dict.get("total_minutes_spent", 0) or 0)
+
+            normalized.append(item_dict)
+
+        final_minutes = (
+            minutes_spent
+            if minutes_spent is not None and minutes_spent > 0
+            else computed_minutes
+            if computed_minutes > 0
+            else default_mins
+        )
+        return normalized, final_minutes
+
+    async def _resolve_project_name(self, entry: Timesheet) -> Optional[str]:
+        if entry.project_id:
+            project = await self._project_repo.get_by_id(entry.project_id)
+            if project:
+                return project.name
+        elif (
+            isinstance(entry.activity_summary, list) and len(entry.activity_summary) > 0
+        ):
+            first_item = entry.activity_summary[0]
+            if isinstance(first_item, dict):
+                return first_item.get("project_name")
+        return None
+
+    async def _enrich_entries_with_project_names(
+        self, entries: list[Timesheet]
+    ) -> list[TimesheetEntryRead]:
+        project_ids = {e.project_id for e in entries if e.project_id}
+        project_map: dict[uuid.UUID, str] = {}
+        for pid in project_ids:
+            proj = await self._project_repo.get_by_id(pid)
+            if proj:
+                project_map[pid] = proj.name
+
+        result_dtos = []
+        for entry in entries:
+            dto = TimesheetEntryRead.model_validate(entry)
+            if entry.project_id and entry.project_id in project_map:
+                dto.project_name = project_map[entry.project_id]
+            elif (
+                isinstance(entry.activity_summary, list)
+                and len(entry.activity_summary) > 0
+            ):
+                first_item = entry.activity_summary[0]
+                if isinstance(first_item, dict):
+                    dto.project_name = first_item.get("project_name")
+            result_dtos.append(dto)
+
+        return result_dtos
+
+    async def _record_audit_log(
+        self,
+        user_id: uuid.UUID,
+        action: AuditAction,
+        entity_id: Optional[uuid.UUID],
+        extra_metadata: Optional[dict[str, Any]] = None,
+    ) -> None:
+        audit_entry = AuditLog(
+            user_id=user_id,
+            action=action.value,
+            module=AuditModule.TIMESHEETS.value,
+            entity=AuditEntity.TIMESHEET.value,
+            entity_id=entity_id,
+            extra_metadata=extra_metadata,
+        )
+        await self._audit_repo.create(audit_entry)
+
+    def _validate_status_transition(
+        self,
+        entry: Timesheet,
+        approver_id: uuid.UUID,
+        is_super: bool,
+        payload: TimesheetStatusUpdatePayload,
+    ) -> None:
+        if entry.status == "approved" and not is_super:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Timesheet duration must be greater than 0 hours.",
+                detail="Only Super Admin can modify approved timesheets.",
             )
 
-        if total_hours > 24.0:
+        if entry.user_id == approver_id and not is_super:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You cannot approve or reject your own timesheet.",
+            )
+
+        if payload.status == "rejected" and not payload.rejection_reason:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Total hours logged for a single day cannot exceed 24 hours.",
+                detail="Rejection reason is required when rejecting a timesheet.",
             )
 
-        # Check existing entry for user on that day
+    async def _dispatch_status_notification(
+        self,
+        entry: Timesheet,
+        approver_user: Optional[User],
+        payload: TimesheetStatusUpdatePayload,
+    ) -> None:
+        if not self._notif_service:
+            return
+        approver_name = (
+            f"{approver_user.first_name} {approver_user.last_name}".strip()
+            if approver_user
+            else "Manager"
+        )
+        try:
+            await self._notif_service.notify_timesheet_status_updated(
+                employee_id=entry.user_id,
+                approver_name=approver_name,
+                work_date=entry.work_date,
+                status_str=payload.status,
+                comments=payload.rejection_reason,
+            )
+        except Exception:
+            pass
+
+    async def create_entry(
+        self, user_id: uuid.UUID, payload: TimesheetEntryCreatePayload
+    ) -> TimesheetEntryRead:
+        normalized_summary, total_mins = await self._normalize_activity_summary(
+            payload.activity_summary, minutes_spent=payload.total_minutes_spent
+        )
+        self._validate_creation_dates_and_minutes(payload.work_date, total_mins)
+
         existing_entry = await self._timesheet_repo.get_by_user_and_date(
             user_id, payload.work_date
         )
 
         if existing_entry:
-            # Update existing daily entry with new consolidated allocations
-            updated_entry = await self._timesheet_repo.update(
-                existing_entry,
-                {
-                    "hours_spent": total_hours,
-                    "activity_summary": normalized_summary,
-                    "project_id": payload.project_id or existing_entry.project_id,
-                    "status": "submitted",
-                },
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"A timesheet entry already exists for {payload.work_date} (Status: '{existing_entry.status}'). You cannot create multiple entries for the same date.",
             )
-            entry = updated_entry
-        else:
-            new_entry = Timesheet(
-                user_id=user_id,
-                project_id=payload.project_id,
-                work_date=payload.work_date,
-                hours_spent=total_hours,
-                is_billable=payload.is_billable,
-                activity_summary=normalized_summary,
-                status="submitted",
-            )
-            entry = await self._timesheet_repo.create(new_entry)
 
-        audit_entry = AuditLog(
+        new_entry = Timesheet(
             user_id=user_id,
-            action=AuditAction.TIMESHEET_CREATE.value,
-            module=AuditModule.TIMESHEETS.value,
-            entity=AuditEntity.TIMESHEET.value,
+            project_id=payload.project_id,
+            work_date=payload.work_date,
+            total_minutes_spent=total_mins,
+            is_billable=payload.is_billable,
+            activity_summary=normalized_summary,
+            status="submitted",
+        )
+        entry = await self._timesheet_repo.create(new_entry)
+
+        await self._record_audit_log(
+            user_id=user_id,
+            action=AuditAction.TIMESHEET_CREATE,
             entity_id=entry.id,
             extra_metadata={
                 "work_date": str(entry.work_date),
-                "hours": entry.hours_spent,
+                "total_minutes_spent": entry.total_minutes_spent,
             },
         )
-        await self._audit_repo.create_log(audit_entry)
 
         if self._notif_service and self._user_repo:
             try:
                 employee_user = await self._user_repo.get_with_details(user_id)
                 if employee_user:
+                    formatted_time = f"{total_mins // 60:02d}:{total_mins % 60:02d}"
                     await self._notif_service.notify_timesheet_submitted(
                         employee=employee_user,
                         work_date=payload.work_date,
-                        total_hours=total_hours,
+                        formatted_time=formatted_time,
                     )
             except Exception:
                 pass
 
-        project_name = None
-        if entry.project_id:
-            project = await self._project_repo.get_by_id(entry.project_id)
-            if project:
-                project_name = project.name
-        elif (
-            isinstance(entry.activity_summary, list) and len(entry.activity_summary) > 0
-        ):
-            project_name = entry.activity_summary[0].get("project_name")
-
+        project_name = await self._resolve_project_name(entry)
         read_dto = TimesheetEntryRead.model_validate(entry)
         read_dto.project_name = project_name
         return read_dto
@@ -199,7 +319,6 @@ class TimesheetService:
         if not payloads:
             return []
 
-        # If multiple individual project/task entries are passed, group by work_date
         date_groups: dict[date, list[TimesheetEntryCreatePayload]] = {}
         for p in payloads:
             date_groups.setdefault(p.work_date, []).append(p)
@@ -220,46 +339,48 @@ class TimesheetService:
                     for block in item.activity_summary:
                         allocations.append(block)
                 else:
-                    proj_name = None
-                    if item.project_id:
-                        proj = await self._project_repo.get_by_id(item.project_id)
-                        if proj:
-                            proj_name = proj.name
+                    proj = (
+                        await self._project_repo.get_by_id(item.project_id)
+                        if item.project_id
+                        else None
+                    )
+                    item_mins = item.total_minutes_spent or 0
                     allocations.append(
                         {
                             "project_id": str(item.project_id)
                             if item.project_id
                             else None,
-                            "project_name": proj_name,
+                            "project_name": proj.name if proj else None,
                             "tasks": [
                                 {
                                     "summary": str(item.activity_summary),
-                                    "hours": float(item.hours_spent or 0.0),
+                                    "hours": item_mins // 60,
+                                    "minutes": item_mins % 60,
+                                    "formatted_time": f"{item_mins // 60:02d}:{item_mins % 60:02d}",
                                 }
                             ],
-                            "total_hours": float(item.hours_spent or 0.0),
+                            "total_minutes_spent": item_mins,
                         }
                     )
 
             consolidated_payload = TimesheetEntryCreatePayload(
                 project_id=primary_project_id,
                 work_date=target_date,
-                hours_spent=None,
+                total_minutes_spent=sum(
+                    (a.get("total_minutes_spent", 0) if isinstance(a, dict) else 0)
+                    for a in allocations
+                ),
                 activity_summary=allocations,
             )
             dto = await self.create_entry(user_id, consolidated_payload)
             created_dtos.append(dto)
 
-        audit_entry = AuditLog(
+        await self._record_audit_log(
             user_id=user_id,
-            action=AuditAction.TIMESHEET_CREATE.value,
-            module=AuditModule.TIMESHEETS.value,
-            entity=AuditEntity.TIMESHEET.value,
+            action=AuditAction.TIMESHEET_CREATE,
             entity_id=None,
             extra_metadata={"batch_count": len(created_dtos)},
         )
-        await self._audit_repo.create_log(audit_entry)
-
         return created_dtos
 
     async def update_entry(
@@ -281,10 +402,10 @@ class TimesheetService:
                 detail="You can only edit your own timesheet entries.",
             )
 
-        if entry.status in ("approved", "submitted"):
+        if entry.status == "approved":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot edit timesheet entry with status '{entry.status}'.",
+                detail="Cannot edit timesheet entry with status 'approved'.",
             )
 
         update_fields = payload.model_dump(exclude_unset=True)
@@ -294,40 +415,46 @@ class TimesheetService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot log timesheet for future dates.",
             )
-        target_hours = update_fields.get("hours_spent", entry.hours_spent)
 
-        existing_hours = float(
-            await self._timesheet_repo.get_user_daily_logged_hours(
-                user_id=user_id,
-                target_date=target_date,
-                exclude_entry_id=entry.id,
-                for_update=True,
+        if (
+            "activity_summary" in update_fields
+            or "total_minutes_spent" in update_fields
+        ):
+            normalized_summary, total_mins = await self._normalize_activity_summary(
+                update_fields.get("activity_summary", entry.activity_summary),
+                minutes_spent=update_fields.get("total_minutes_spent"),
             )
+            update_fields["activity_summary"] = normalized_summary
+            update_fields["total_minutes_spent"] = total_mins
+
+        target_mins = update_fields.get(
+            "total_minutes_spent", entry.total_minutes_spent or 0
         )
-        if existing_hours + float(target_hours) > 24.0:
+        existing_mins = await self._timesheet_repo.get_user_daily_logged_minutes(
+            user_id=user_id,
+            target_date=target_date,
+            exclude_entry_id=entry.id,
+            for_update=True,
+        )
+        if existing_mins + target_mins > 1440:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Total hours logged for {target_date} would exceed 24 hours.",
+                detail=f"Total duration logged for {target_date} would exceed 24 hours (1440 minutes).",
             )
 
-        updated_entry = await self._timesheet_repo.update(entry, update_fields)
+        if entry.status == "rejected":
+            update_fields["status"] = "submitted"
+            update_fields["rejection_reason"] = None
 
-        audit_entry = AuditLog(
+        updated_entry = await self._timesheet_repo.update(entry, update_fields)
+        await self._record_audit_log(
             user_id=user_id,
-            module=AuditModule.TIMESHEETS,
-            action=AuditAction.TIMESHEET_UPDATE.value,
-            entity=AuditEntity.TIMESHEET.value,
+            action=AuditAction.TIMESHEET_UPDATE,
             entity_id=updated_entry.id,
             extra_metadata={"updated_fields": list(update_fields.keys())},
         )
-        await self._audit_repo.create_log(audit_entry)
 
-        project_name = None
-        if updated_entry.project_id:
-            project = await self._project_repo.get_by_id(updated_entry.project_id)
-            if project:
-                project_name = project.name
-
+        project_name = await self._resolve_project_name(updated_entry)
         read_dto = TimesheetEntryRead.model_validate(updated_entry)
         read_dto.project_name = project_name
         return read_dto
@@ -346,22 +473,18 @@ class TimesheetService:
                 detail="You can only delete your own timesheet entries.",
             )
 
-        if entry.status != "draft":
+        if entry.status == "approved":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot delete timesheet entry with status '{entry.status}'.",
+                detail="Cannot delete timesheet entry with status 'approved'.",
             )
 
         await self._timesheet_repo.delete(entry)
-
-        audit_entry = AuditLog(
+        await self._record_audit_log(
             user_id=user_id,
-            module=AuditModule.TIMESHEETS.value,
-            action=AuditAction.TIMESHEET_DELETE.value,
-            entity=AuditEntity.TIMESHEET.value,
+            action=AuditAction.TIMESHEET_DELETE,
             entity_id=entry_id,
         )
-        await self._audit_repo.create_log(audit_entry)
 
     async def list_entries(
         self,
@@ -386,30 +509,103 @@ class TimesheetService:
             offset=offset,
             limit=limit,
         )
+        dtos = await self._enrich_entries_with_project_names(list(entries))
+        return dtos, total
 
-        project_ids = {e.project_id for e in entries if e.project_id}
-        project_map = {}
-        if project_ids:
-            for pid in project_ids:
-                proj = await self._project_repo.get_by_id(pid)
-                if proj:
-                    project_map[pid] = proj.name
+    async def list_user_or_team_entries(
+        self,
+        current_user: User,
+        requested_user_id: Optional[uuid.UUID] = None,
+        project_id: Optional[uuid.UUID] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        entry_status: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 20,
+    ) -> tuple[list[TimesheetEntryRead], int]:
+        is_super = self._is_super_admin(current_user)
 
-        result_dtos = []
-        for entry in entries:
-            dto = TimesheetEntryRead.model_validate(entry)
-            if entry.project_id and entry.project_id in project_map:
-                dto.project_name = project_map[entry.project_id]
-            elif (
-                isinstance(entry.activity_summary, list)
-                and len(entry.activity_summary) > 0
-            ):
-                first_item = entry.activity_summary[0]
-                if isinstance(first_item, dict):
-                    dto.project_name = first_item.get("project_name")
-            result_dtos.append(dto)
+        if requested_user_id:
+            authorized_user_ids = (
+                await self._user_repo.get_authorized_viewable_user_ids(
+                    current_user, requested_user_id
+                )
+                if self._user_repo
+                else [requested_user_id]
+            )
+            return await self.list_entries(
+                user_id=None,
+                user_ids=authorized_user_ids,
+                project_id=project_id,
+                start_date=start_date,
+                end_date=end_date,
+                entry_status=entry_status,
+                offset=offset,
+                limit=limit,
+            )
 
-        return result_dtos, total
+        if entry_status == "submitted":
+            if is_super:
+                return await self.list_entries(
+                    user_id=None,
+                    user_ids=None,
+                    exclude_user_id=None,
+                    project_id=project_id,
+                    start_date=start_date,
+                    end_date=end_date,
+                    entry_status=entry_status,
+                    offset=offset,
+                    limit=limit,
+                )
+
+            authorized_user_ids = (
+                await self._user_repo.get_authorized_viewable_user_ids(
+                    current_user, None
+                )
+                if self._user_repo
+                else None
+            )
+
+            if authorized_user_ids is not None:
+                filtered_user_ids = [
+                    uid for uid in authorized_user_ids if uid != current_user.id
+                ]
+                if not filtered_user_ids:
+                    return [], 0
+                return await self.list_entries(
+                    user_id=None,
+                    user_ids=filtered_user_ids,
+                    exclude_user_id=current_user.id,
+                    project_id=project_id,
+                    start_date=start_date,
+                    end_date=end_date,
+                    entry_status=entry_status,
+                    offset=offset,
+                    limit=limit,
+                )
+
+            return await self.list_entries(
+                user_id=None,
+                user_ids=None,
+                exclude_user_id=current_user.id,
+                project_id=project_id,
+                start_date=start_date,
+                end_date=end_date,
+                entry_status=entry_status,
+                offset=offset,
+                limit=limit,
+            )
+
+        return await self.list_entries(
+            user_id=current_user.id,
+            user_ids=None,
+            project_id=project_id,
+            start_date=start_date,
+            end_date=end_date,
+            entry_status=entry_status,
+            offset=offset,
+            limit=limit,
+        )
 
     async def submit_timesheets(
         self, user_id: uuid.UUID, payload: TimesheetSubmitPayload
@@ -432,18 +628,16 @@ class TimesheetService:
             entry_ids=draft_ids, new_status="submitted"
         )
 
-        audit_entry = AuditLog(
+        await self._record_audit_log(
             user_id=user_id,
-            action=AuditAction.TIMESHEET_SUBMIT.value,
-            module=AuditModule.TIMESHEETS.value,
-            entity=AuditEntity.TIMESHEET.value,
+            action=AuditAction.TIMESHEET_SUBMIT,
+            entity_id=None,
             extra_metadata={
                 "submitted_count": updated_count,
                 "start_date": str(payload.start_date),
                 "end_date": str(payload.end_date),
             },
         )
-        await self._audit_repo.create_log(audit_entry)
         return updated_count
 
     async def update_entry_status(
@@ -459,23 +653,13 @@ class TimesheetService:
                 detail=f"Timesheet entry with ID '{entry_id}' not found.",
             )
 
-        if entry.user_id == approver_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="You cannot approve or reject your own timesheet. It must be reviewed by your manager or an administrator.",
-            )
-
-        if entry.status != "submitted":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Only submitted timesheet entries can be approved or rejected. Current status is '{entry.status}'.",
-            )
-
-        if payload.status not in ("approved", "rejected"):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Target status must be 'approved' or 'rejected'. Received '{payload.status}'.",
-            )
+        approver_user = (
+            await self._user_repo.get_with_details(approver_id)
+            if self._user_repo
+            else None
+        )
+        is_super = self._is_super_admin(approver_user)
+        self._validate_status_transition(entry, approver_id, is_super, payload)
 
         update_data = {
             "status": payload.status,
@@ -486,43 +670,19 @@ class TimesheetService:
         }
         await self._timesheet_repo.update(entry, update_data)
 
-        audit_entry = AuditLog(
+        await self._record_audit_log(
             user_id=approver_id,
-            action=AuditAction.TIMESHEET_STATUS_UPDATE.value,
-            module=AuditModule.TIMESHEETS.value,
-            entity=AuditEntity.TIMESHEET.value,
+            action=AuditAction.TIMESHEET_STATUS_UPDATE,
             entity_id=entry.id,
             extra_metadata={
                 "new_status": payload.status,
                 "rejection_reason": payload.rejection_reason,
             },
         )
-        await self._audit_repo.create_log(audit_entry)
 
-        if self._notif_service and self._user_repo:
-            try:
-                approver_user = await self._user_repo.get_with_details(approver_id)
-                approver_name = (
-                    f"{approver_user.first_name} {approver_user.last_name}".strip()
-                    if approver_user
-                    else "Manager"
-                )
-                await self._notif_service.notify_timesheet_status_updated(
-                    employee_id=entry.user_id,
-                    approver_name=approver_name,
-                    work_date=entry.work_date,
-                    status_str=payload.status,
-                    comments=payload.rejection_reason,
-                )
-            except Exception:
-                pass
+        await self._dispatch_status_notification(entry, approver_user, payload)
 
-        project_name = None
-        if entry.project_id:
-            project = await self._project_repo.get_by_id(entry.project_id)
-            if project:
-                project_name = project.name
-
+        project_name = await self._resolve_project_name(entry)
         dto = TimesheetEntryRead.model_validate(entry)
         dto.project_name = project_name
         return dto
@@ -534,20 +694,16 @@ class TimesheetService:
             user_id=user_id, start_date=start_date, end_date=end_date
         )
 
-        total_hours = sum(float(e.hours_spent) for e in entries)
-        billable_hours = sum(float(e.hours_spent) for e in entries if e.is_billable)
-        non_billable_hours = total_hours - billable_hours
+        total_mins = sum((entry.total_minutes_spent or 0) for entry in entries)
 
-        status_breakdown = {}
+        status_breakdown: dict[str, int] = {}
         for entry in entries:
             status_breakdown[entry.status] = status_breakdown.get(entry.status, 0) + 1
 
         return WeeklyTimesheetSummaryRead(
             start_date=start_date,
             end_date=end_date,
-            total_hours=total_hours,
-            billable_hours=billable_hours,
-            non_billable_hours=non_billable_hours,
+            total_minutes_spent=total_mins,
             entries_count=len(entries),
             status_breakdown=status_breakdown,
         )

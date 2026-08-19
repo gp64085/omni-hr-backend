@@ -113,7 +113,7 @@ class NotificationService:
         self,
         employee: User,
         work_date: date,
-        total_hours: float,
+        formatted_time: str,
     ) -> None:
         target_ids: set[uuid.UUID] = set()
 
@@ -128,7 +128,7 @@ class NotificationService:
 
         employee_name = f"{employee.first_name} {employee.last_name}".strip()
         title = f"Timesheet Submitted: {employee_name}"
-        message = f"{employee_name} logged {total_hours:g}h of work for {work_date.isoformat()}."
+        message = f"{employee_name} logged {formatted_time}h of work for {work_date.isoformat()}."
 
         notifications = [
             Notification(
