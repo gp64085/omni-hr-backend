@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     # Frontend & Password Reset
     FRONTEND_URL: str = "http://localhost:3000"
     PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 15
+    PASSWORD_RESET_MIN_DURATION_SECONDS: float = 0.15
 
     # SMTP & Email Settings
     SMTP_HOST: Optional[str] = None

@@ -242,6 +242,60 @@ async def test_forgot_password_generic_success_for_non_existing_user():
 
 
 @pytest.mark.asyncio
+async def test_forgot_password_delivery_failure_preserves_generic_response_and_rolls_back(
+    monkeypatch, caplog
+):
+    import smtplib
+
+    from app.core.services.email_service import EmailService
+
+    async def mock_failing_send(
+        self, to_email: str, recipient_name: str, reset_url: str
+    ):
+        raise smtplib.SMTPException("Simulated SMTP delivery failure")
+
+    monkeypatch.setattr(EmailService, "send_password_reset_email", mock_failing_send)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        res = await ac.post(
+            "/api/v1/auth/forgot-password",
+            json={"email": "emp_recovery@omnihr.com"},
+        )
+        # Anti-enumeration requirement: delivery failure must produce exact same 200 generic success response
+        assert res.status_code == 200
+        body = res.json()
+        assert body["success"] is True
+        assert (
+            body["data"]["message"]
+            == "If an account with this email exists, a password reset link has been sent."
+        )
+
+        # Database state: uncommitted reset work must be cleanly rolled back
+        async with TestingSessionLocal() as session:
+            repo = UserRepository(session)
+            user = await repo.get_by_email("emp_recovery@omnihr.com")
+            assert user is not None
+
+            tokens_res = await session.execute(
+                select(PasswordResetToken).where(
+                    PasswordResetToken.user_id == user.id,
+                    PasswordResetToken.is_used.is_(False),
+                )
+            )
+            # Token was not committed due to savepoint rollback
+            assert tokens_res.scalar_one_or_none() is None
+
+        # Logging check: failure logged without the secret token or reset URL
+        assert (
+            "Password reset email delivery failed for user emp_recovery@omnihr.com"
+            in caplog.text
+        )
+        assert "reset-password?token=" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_reset_password_success():
     from app.core.services.token_service import TokenService
 
@@ -445,3 +499,109 @@ async def test_forgot_password_initiation_does_not_revoke_refresh_tokens():
         )
         assert refresh_res.status_code == 200
         assert "access_token" in refresh_res.json()["data"]
+
+
+@pytest.mark.asyncio
+async def test_forgot_password_uniform_timing_independent_of_account_status():
+    import time
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        min_duration = settings.PASSWORD_RESET_MIN_DURATION_SECONDS
+
+        t0 = time.monotonic()
+        res_existing = await ac.post(
+            "/api/v1/auth/forgot-password",
+            json={"email": "emp_recovery@omnihr.com"},
+        )
+        elapsed_existing = time.monotonic() - t0
+        assert res_existing.status_code == 200
+        assert elapsed_existing >= min_duration
+
+        t0 = time.monotonic()
+        res_unknown = await ac.post(
+            "/api/v1/auth/forgot-password",
+            json={"email": "non_existent_random_user@omnihr.com"},
+        )
+        elapsed_unknown = time.monotonic() - t0
+        assert res_unknown.status_code == 200
+        assert elapsed_unknown >= min_duration
+
+
+@pytest.mark.asyncio
+async def test_refresh_token_serialized_with_password_reset_revocation():
+    import asyncio
+
+    from app.core.services.token_service import TokenService
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        # 1. Login to obtain a valid refresh token
+        login_res = await ac.post(
+            "/api/v1/auth/login",
+            json={"email": "emp_recovery@omnihr.com", "password": "EmpPass123!"},
+        )
+        assert login_res.status_code == 200
+        initial_refresh_token = login_res.json()["data"]["refresh_token"]
+
+        # 2. Seed a valid password reset token
+        raw_reset_token = "interleaved_reset_token_secret"
+        reset_token_hash = TokenService.hash_token(raw_reset_token)
+
+        async with TestingSessionLocal() as session:
+            repo = UserRepository(session)
+            user = await repo.get_by_email("emp_recovery@omnihr.com")
+            assert user is not None
+            pr_token = PasswordResetToken(
+                user_id=user.id,
+                token_hash=reset_token_hash,
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
+                is_used=False,
+            )
+            await repo.create_password_reset_token(pr_token)
+            await session.commit()
+
+        # 3. Interleave refresh and password reset concurrently for the same user
+        refresh_task = ac.post(
+            "/api/v1/auth/refresh",
+            json={"refresh_token": initial_refresh_token},
+        )
+        reset_task = ac.post(
+            "/api/v1/auth/reset-password",
+            json={"token": raw_reset_token, "new_password": "InterleavedResetPass123!"},
+        )
+
+        results = await asyncio.gather(refresh_task, reset_task, return_exceptions=True)
+        refresh_res, reset_res = results[0], results[1]
+
+        # Reset password must succeed
+        assert reset_res.status_code == 200
+
+        # If refresh happened to return 200 (executed right before reset acquired lock),
+        # the resulting new refresh token MUST have been revoked by the reset!
+        if refresh_res.status_code == 200:
+            new_refresh_token = refresh_res.json()["data"]["refresh_token"]
+            # Attempting to use the new refresh token must be rejected with 401
+            subsequent_refresh = await ac.post(
+                "/api/v1/auth/refresh",
+                json={"refresh_token": new_refresh_token},
+            )
+            assert subsequent_refresh.status_code == 401
+        else:
+            # If refresh was serialized after reset, it was rejected directly with 401
+            assert refresh_res.status_code == 401
+
+        # Verify that in database NO unrevoked refresh tokens exist for the user
+        async with TestingSessionLocal() as session:
+            repo = UserRepository(session)
+            user = await repo.get_by_email("emp_recovery@omnihr.com")
+            active_tokens_query = await session.execute(
+                select(RefreshToken).where(
+                    RefreshToken.user_id == user.id,
+                    RefreshToken.is_revoked.is_(False),
+                )
+            )
+            unrevoked_tokens = active_tokens_query.scalars().all()
+            assert len(unrevoked_tokens) == 0

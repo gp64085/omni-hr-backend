@@ -45,6 +45,20 @@ class UserRepository(BaseRepository[User]):
         )
         return query_result.scalar_one_or_none()
 
+    async def get_for_update(self, user_id: uuid.UUID) -> Optional[User]:
+        query_result = await self._database_session.execute(
+            select(User)
+            .options(
+                selectinload(User.department),
+                selectinload(User.designation),
+                selectinload(User.profile),
+                selectinload(User.role),
+            )
+            .where(User.id == user_id)
+            .with_for_update()
+        )
+        return query_result.scalar_one_or_none()
+
     async def search_users(
         self,
         offset: int = 0,
