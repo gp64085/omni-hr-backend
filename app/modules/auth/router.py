@@ -8,7 +8,13 @@ from app.api.deps import (
 )
 from app.core.services.cache_service import CacheService
 from app.models.user import User
-from app.modules.auth.schemas import LoginRequest, RefreshTokenRequest, TokenResponse
+from app.modules.auth.schemas import (
+    ForgotPasswordRequest,
+    LoginRequest,
+    RefreshTokenRequest,
+    ResetPasswordRequest,
+    TokenResponse,
+)
 from app.modules.auth.service import AuthService
 from app.modules.users.schemas import UserResponse
 from app.schemas.common import StandardResponse
@@ -41,6 +47,40 @@ async def refresh_access_token(
 ):
     token_response = await auth_service.refresh_tokens(payload.refresh_token)
     return StandardResponse.ok(data=token_response)
+
+
+@public_auth_router.post(
+    "/forgot-password",
+    response_model=StandardResponse[dict],
+    response_model_exclude_none=True,
+)
+async def forgot_password(
+    payload: ForgotPasswordRequest,
+    auth_service: AuthService = Depends(get_auth_service),
+):
+    await auth_service.request_password_reset(payload)
+    return StandardResponse.ok(
+        data={
+            "message": "If an account with this email exists, a password reset link has been sent."
+        }
+    )
+
+
+@public_auth_router.post(
+    "/reset-password",
+    response_model=StandardResponse[dict],
+    response_model_exclude_none=True,
+)
+async def reset_password(
+    payload: ResetPasswordRequest,
+    auth_service: AuthService = Depends(get_auth_service),
+):
+    await auth_service.reset_password(payload)
+    return StandardResponse.ok(
+        data={
+            "message": "Password has been reset successfully. Please log in with your new password."
+        }
+    )
 
 
 @protected_auth_router.post(

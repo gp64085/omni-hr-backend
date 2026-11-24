@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -144,3 +145,231 @@ async def test_user_repository_reset_and_refresh_token_ops():
         await repo.revoke_all_refresh_tokens(user.id)
         revoked = await repo.get_refresh_token("refreshtokenhash123")
         assert revoked is None  # get_refresh_token only returns non-revoked
+
+
+@pytest.mark.asyncio
+async def test_forgot_password_generic_success_for_existing_user():
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        res = await ac.post(
+            "/api/v1/auth/forgot-password",
+            json={"email": "emp_recovery@omnihr.com"},
+        )
+        assert res.status_code == 200
+        body = res.json()
+        assert body["success"] is True
+        assert (
+            body["data"]["message"]
+            == "If an account with this email exists, a password reset link has been sent."
+        )
+
+        async with TestingSessionLocal() as session:
+            repo = UserRepository(session)
+            user = await repo.get_by_email("emp_recovery@omnihr.com")
+            assert user is not None
+            # Check token was created
+            tokens_res = await session.execute(
+                select(PasswordResetToken).where(
+                    PasswordResetToken.user_id == user.id,
+                    PasswordResetToken.is_used.is_(False),
+                )
+            )
+            token_record = tokens_res.scalar_one_or_none()
+            assert token_record is not None
+
+
+@pytest.mark.asyncio
+async def test_forgot_password_generic_success_for_non_existing_user():
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        res = await ac.post(
+            "/api/v1/auth/forgot-password",
+            json={"email": "nobody_exists@omnihr.com"},
+        )
+        assert res.status_code == 200
+        body = res.json()
+        assert body["success"] is True
+        assert (
+            body["data"]["message"]
+            == "If an account with this email exists, a password reset link has been sent."
+        )
+
+
+@pytest.mark.asyncio
+async def test_reset_password_success():
+    from app.core.services.token_service import TokenService
+
+    raw_token = "test_raw_reset_token_secret_32chars"
+    token_hash = TokenService.hash_token(raw_token)
+
+    async with TestingSessionLocal() as session:
+        repo = UserRepository(session)
+        user = await repo.get_by_email("emp_recovery@omnihr.com")
+        assert user is not None
+        reset_token = PasswordResetToken(
+            user_id=user.id,
+            token_hash=token_hash,
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
+            is_used=False,
+        )
+        await repo.create_password_reset_token(reset_token)
+        await session.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        res = await ac.post(
+            "/api/v1/auth/reset-password",
+            json={"token": raw_token, "new_password": "BrandNewPassword123!"},
+        )
+        assert res.status_code == 200
+        body = res.json()
+        assert body["success"] is True
+
+        # Verify old password fails
+        login_fail = await ac.post(
+            "/api/v1/auth/login",
+            json={"email": "emp_recovery@omnihr.com", "password": "EmpPass123!"},
+        )
+        assert login_fail.status_code == 401
+
+        # Verify new password succeeds
+        login_ok = await ac.post(
+            "/api/v1/auth/login",
+            json={
+                "email": "emp_recovery@omnihr.com",
+                "password": "BrandNewPassword123!",
+            },
+        )
+        assert login_ok.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_reset_password_revokes_active_sessions():
+    from app.core.services.token_service import TokenService
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        # 1. Log in to get active refresh token
+        login_res = await ac.post(
+            "/api/v1/auth/login",
+            json={"email": "emp_recovery@omnihr.com", "password": "EmpPass123!"},
+        )
+        assert login_res.status_code == 200
+        old_refresh_token = login_res.json()["data"]["refresh_token"]
+
+        # 2. Reset password
+        raw_token = "session_revocation_test_token"
+        token_hash = TokenService.hash_token(raw_token)
+        async with TestingSessionLocal() as session:
+            repo = UserRepository(session)
+            user = await repo.get_by_email("emp_recovery@omnihr.com")
+            reset_token = PasswordResetToken(
+                user_id=user.id,
+                token_hash=token_hash,
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
+                is_used=False,
+            )
+            await repo.create_password_reset_token(reset_token)
+            await session.commit()
+
+        reset_res = await ac.post(
+            "/api/v1/auth/reset-password",
+            json={"token": raw_token, "new_password": "AfterSessionResetPass1!"},
+        )
+        assert reset_res.status_code == 200
+
+        # 3. Old refresh token must be rejected
+        refresh_res = await ac.post(
+            "/api/v1/auth/refresh",
+            json={"refresh_token": old_refresh_token},
+        )
+        assert refresh_res.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_reset_password_expired_token_rejected():
+    from app.core.services.token_service import TokenService
+
+    raw_token = "expired_raw_token_xyz"
+    token_hash = TokenService.hash_token(raw_token)
+
+    async with TestingSessionLocal() as session:
+        repo = UserRepository(session)
+        user = await repo.get_by_email("emp_recovery@omnihr.com")
+        reset_token = PasswordResetToken(
+            user_id=user.id,
+            token_hash=token_hash,
+            expires_at=datetime.now(timezone.utc) - timedelta(minutes=5),  # expired
+            is_used=False,
+        )
+        await repo.create_password_reset_token(reset_token)
+        await session.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        res = await ac.post(
+            "/api/v1/auth/reset-password",
+            json={"token": raw_token, "new_password": "ValidPassword123!"},
+        )
+        assert res.status_code == 400
+        body = res.json()
+        assert body["success"] is False
+        assert "Invalid or expired reset token" in body["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_reset_password_reused_token_rejected():
+    from app.core.services.token_service import TokenService
+
+    raw_token = "reused_raw_token_xyz"
+    token_hash = TokenService.hash_token(raw_token)
+
+    async with TestingSessionLocal() as session:
+        repo = UserRepository(session)
+        user = await repo.get_by_email("emp_recovery@omnihr.com")
+        reset_token = PasswordResetToken(
+            user_id=user.id,
+            token_hash=token_hash,
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
+            is_used=False,
+        )
+        await repo.create_password_reset_token(reset_token)
+        await session.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        # First reset -> success
+        res1 = await ac.post(
+            "/api/v1/auth/reset-password",
+            json={"token": raw_token, "new_password": "ValidPassword123!"},
+        )
+        assert res1.status_code == 200
+
+        # Second reset with same token -> rejected
+        res2 = await ac.post(
+            "/api/v1/auth/reset-password",
+            json={"token": raw_token, "new_password": "SecondPassword123!"},
+        )
+        assert res2.status_code == 400
+        body = res2.json()
+        assert body["success"] is False
+        assert "Invalid or expired reset token" in body["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_reset_password_short_password_rejected():
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        res = await ac.post(
+            "/api/v1/auth/reset-password",
+            json={"token": "sometoken", "new_password": "short"},
+        )
+        assert res.status_code == 422
+

@@ -1,15 +1,23 @@
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from fastapi import HTTPException, status
 
 from app.core.config import settings
+from app.core.services.email_service import EmailService
 from app.core.services.password_service import PasswordService
 from app.core.services.token_service import TokenService
 from app.models.audit import AuditAction, AuditEntity, AuditLog, AuditModule
-from app.models.user import RefreshToken, User
+from app.models.user import PasswordResetToken, RefreshToken, User
 from app.modules.audit.repository import AuditLogRepository
-from app.modules.auth.schemas import LoginRequest, TokenResponse
+from app.modules.auth.schemas import (
+    ForgotPasswordRequest,
+    LoginRequest,
+    ResetPasswordRequest,
+    TokenResponse,
+)
 from app.modules.users.repository import UserRepository
 
 
@@ -18,9 +26,11 @@ class AuthService:
         self,
         user_repository: UserRepository,
         audit_repository: AuditLogRepository,
+        email_service: Optional[EmailService] = None,
     ):
         self._user_repository = user_repository
         self._audit_repository = audit_repository
+        self._email_service = email_service or EmailService()
 
     async def authenticate_user(self, payload: LoginRequest) -> TokenResponse:
         user_entity = await self._user_repository.get_by_email(payload.email)
@@ -169,3 +179,102 @@ class AuthService:
             token_type="bearer",
             expires_in_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         )
+
+    async def request_password_reset(
+        self, payload: ForgotPasswordRequest
+    ) -> None:
+        user_entity = await self._user_repository.get_by_email(payload.email)
+        if user_entity and user_entity.is_active:
+            await self._user_repository.invalidate_user_reset_tokens(user_entity.id)
+            raw_token = secrets.token_urlsafe(32)
+            token_hash = TokenService.hash_token(raw_token)
+            expires_at = datetime.now(timezone.utc) + timedelta(
+                minutes=settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
+            )
+            reset_record = PasswordResetToken(
+                user_id=user_entity.id,
+                token_hash=token_hash,
+                expires_at=expires_at,
+                is_used=False,
+            )
+            await self._user_repository.create_password_reset_token(reset_record)
+
+            recipient_name = (
+                f"{user_entity.first_name} {user_entity.last_name}".strip()
+            )
+            reset_url = (
+                f"{settings.FRONTEND_URL}/reset-password?token={raw_token}"
+            )
+            await self._email_service.send_password_reset_email(
+                to_email=user_entity.email,
+                recipient_name=recipient_name,
+                reset_url=reset_url,
+            )
+
+            # Audit log
+            audit = AuditLog(
+                user_id=user_entity.id,
+                module=AuditModule.AUTH.value,
+                action=AuditAction.PASSWORD_RESET_REQUESTED.value,
+                entity=AuditEntity.USER.value,
+                entity_id=user_entity.id,
+            )
+            await self._audit_repository.create_log(audit)
+
+    async def reset_password(self, payload: ResetPasswordRequest) -> None:
+        token_hash = TokenService.hash_token(payload.token)
+        token_record = await self._user_repository.get_password_reset_token(
+            token_hash
+        )
+
+        if not token_record or token_record.is_used:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "INVALID_RESET_TOKEN",
+                    "message": "Invalid or expired reset token.",
+                },
+            )
+
+        expiration_datetime = token_record.expires_at
+        if expiration_datetime.tzinfo is None:
+            expiration_datetime = expiration_datetime.replace(tzinfo=timezone.utc)
+
+        if expiration_datetime < datetime.now(timezone.utc):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "EXPIRED_RESET_TOKEN",
+                    "message": "Invalid or expired reset token.",
+                },
+            )
+
+        user_entity = await self._user_repository.get_by_id(token_record.user_id)
+        if not user_entity or not user_entity.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "INVALID_USER",
+                    "message": "Invalid request.",
+                },
+            )
+
+        # Update password hash
+        user_entity.password_hash = PasswordService.hash_password(
+            payload.new_password
+        )
+        token_record.is_used = True
+
+        # Invalidate all active sessions for this user
+        await self._user_repository.revoke_all_refresh_tokens(user_entity.id)
+
+        # Audit log
+        audit = AuditLog(
+            user_id=user_entity.id,
+            module=AuditModule.AUTH.value,
+            action=AuditAction.PASSWORD_RESET_COMPLETED.value,
+            entity=AuditEntity.USER.value,
+            entity_id=user_entity.id,
+        )
+        await self._audit_repository.create_log(audit)
+
