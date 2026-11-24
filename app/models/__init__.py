@@ -1,5 +1,6 @@
 from app.models.audit import AuditAction, AuditEntity, AuditLog, AuditModule
 from app.models.holiday import CompanyHoliday
+from app.models.integration import IntegrationConfig
 from app.models.leave import (
     AccrualFrequency,
     HalfDayType,
@@ -31,6 +32,7 @@ __all__ = [
     "EmployeeProfile",
     "RefreshToken",
     "PasswordResetToken",
+    "IntegrationConfig",
     "UserRole",
     "Role",
     "Permission",
