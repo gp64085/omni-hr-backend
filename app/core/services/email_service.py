@@ -1,9 +1,9 @@
-import email.mime.multipart
-import email.mime.text
 import logging
 import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
-import anyio
+import anyio.to_thread
 
 from app.core.config import settings
 
@@ -60,7 +60,7 @@ class EmailService:
         self, to_email: str, recipient_name: str, reset_url: str
     ) -> None:
         subject = "Reset Your OmniHR Password"
-        msg = email.mime.multipart.MIMEMultipart("alternative")
+        msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
         msg["From"] = f"{self._from_name} <{self._from_email}>"
         msg["To"] = f"{recipient_name} <{to_email}>"
@@ -103,14 +103,17 @@ If you did not request a password reset, you can safely ignore this email.
 </body>
 </html>"""
 
-        msg.attach(email.mime.text.MIMEText(text_content, "plain"))
-        msg.attach(email.mime.text.MIMEText(html_content, "html"))
+        msg.attach(MIMEText(text_content, "plain"))
+        msg.attach(MIMEText(html_content, "html"))
 
         try:
+            if not (self._smtp_host and self._smtp_port):
+                raise RuntimeError("SMTP host or port is not configured.")
+
             with smtplib.SMTP(self._smtp_host, self._smtp_port, timeout=10) as server:
                 if self._smtp_tls:
                     server.starttls()
-                if self._smtp_password:
+                if self._smtp_password and self._smtp_user:
                     server.login(self._smtp_user, self._smtp_password)
                 server.send_message(msg)
                 logger.info("Password reset email sent to %s via SMTP", to_email)
