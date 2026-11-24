@@ -2,6 +2,10 @@ from fastapi import APIRouter
 
 from app.modules.audit.router import audit_logs_router
 from app.modules.auth.router import protected_auth_router, public_auth_router
+from app.modules.integrations.router import (
+    integrations_admin_router,
+    integrations_public_router,
+)
 from app.modules.leaves.router import holidays_router, leaves_router
 from app.modules.notifications.router import notifications_router
 from app.modules.projects.router import projects_router
@@ -34,3 +38,9 @@ api_router.include_router(
     notifications_router, prefix="/notifications", tags=["In-App Notifications"]
 )
 api_router.include_router(audit_logs_router, prefix="/audit-logs", tags=["Audit Trail"])
+api_router.include_router(
+    integrations_admin_router, prefix="/integrations", tags=["Integrations"]
+)
+api_router.include_router(
+    integrations_public_router, prefix="/integrations", tags=["Integrations Webhooks"]
+)
