@@ -180,9 +180,7 @@ class AuthService:
             expires_in_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         )
 
-    async def request_password_reset(
-        self, payload: ForgotPasswordRequest
-    ) -> None:
+    async def request_password_reset(self, payload: ForgotPasswordRequest) -> None:
         user_entity = await self._user_repository.get_by_email(payload.email)
         if user_entity and user_entity.is_active:
             await self._user_repository.invalidate_user_reset_tokens(user_entity.id)
@@ -199,12 +197,8 @@ class AuthService:
             )
             await self._user_repository.create_password_reset_token(reset_record)
 
-            recipient_name = (
-                f"{user_entity.first_name} {user_entity.last_name}".strip()
-            )
-            reset_url = (
-                f"{settings.FRONTEND_URL}/reset-password?token={raw_token}"
-            )
+            recipient_name = f"{user_entity.first_name} {user_entity.last_name}".strip()
+            reset_url = f"{settings.FRONTEND_URL}/reset-password?token={raw_token}"
             await self._email_service.send_password_reset_email(
                 to_email=user_entity.email,
                 recipient_name=recipient_name,
@@ -223,9 +217,7 @@ class AuthService:
 
     async def reset_password(self, payload: ResetPasswordRequest) -> None:
         token_hash = TokenService.hash_token(payload.token)
-        token_record = await self._user_repository.get_password_reset_token(
-            token_hash
-        )
+        token_record = await self._user_repository.get_password_reset_token(token_hash)
 
         if not token_record or token_record.is_used:
             raise HTTPException(
@@ -260,9 +252,7 @@ class AuthService:
             )
 
         # Update password hash
-        user_entity.password_hash = PasswordService.hash_password(
-            payload.new_password
-        )
+        user_entity.password_hash = PasswordService.hash_password(payload.new_password)
         token_record.is_used = True
 
         # Invalidate all active sessions for this user
@@ -277,4 +267,3 @@ class AuthService:
             entity_id=user_entity.id,
         )
         await self._audit_repository.create_log(audit)
-

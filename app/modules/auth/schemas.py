@@ -17,7 +17,6 @@ class ResetPasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=8, description="Minimum 8 characters")
 
 
-
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str

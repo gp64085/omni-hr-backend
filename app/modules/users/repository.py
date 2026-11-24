@@ -5,7 +5,13 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.user import EmployeeProfile, PasswordResetToken, RefreshToken, User, UserRole
+from app.models.user import (
+    EmployeeProfile,
+    PasswordResetToken,
+    RefreshToken,
+    User,
+    UserRole,
+)
 from app.repositories.base import BaseRepository
 
 

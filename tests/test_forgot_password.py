@@ -1,5 +1,5 @@
-import uuid
 from datetime import datetime, timedelta, timezone
+
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -11,9 +11,9 @@ from app.core.config import settings
 from app.core.security import get_password_hash
 from app.db.session import Base, get_db
 from app.main import app
+from app.models.audit import AuditAction
 from app.models.role import Role
 from app.models.user import PasswordResetToken, RefreshToken, User, UserRole
-from app.models.audit import AuditAction
 from app.modules.users.repository import UserRepository
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -401,5 +401,3 @@ async def test_forgot_password_initiation_does_not_revoke_refresh_tokens():
         )
         assert refresh_res.status_code == 200
         assert "access_token" in refresh_res.json()["data"]
-
-

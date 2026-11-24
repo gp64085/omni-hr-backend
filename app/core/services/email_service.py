@@ -2,7 +2,6 @@ import email.mime.multipart
 import email.mime.text
 import logging
 import smtplib
-from typing import Optional
 
 import anyio
 
@@ -107,6 +106,4 @@ Valid for: {settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES} minutes
 ================================================================================
 """
         print(box)
-        logger.info(
-            f"[MOCK EMAIL] Password reset email for {to_email}: {reset_url}"
-        )
+        logger.info(f"[MOCK EMAIL] Password reset email for {to_email}: {reset_url}")
