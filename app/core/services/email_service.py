@@ -14,7 +14,16 @@ class EmailService:
     def __init__(self):
         self._environment = settings.ENVIRONMENT.lower().strip()
         self._email_transport = settings.EMAIL_TRANSPORT.lower().strip()
-        self._smtp_host = settings.SMTP_HOST
+        raw_host = settings.SMTP_HOST
+        if raw_host:
+            host = raw_host.strip()
+            if "://" in host:
+                host = host.split("://")[-1]
+            if host.lower() == "gmail.com":
+                host = "smtp.gmail.com"
+            self._smtp_host = host
+        else:
+            self._smtp_host = None
         self._smtp_port = settings.SMTP_PORT
         self._smtp_user = settings.SMTP_USER
         self._smtp_password = settings.SMTP_PASSWORD
