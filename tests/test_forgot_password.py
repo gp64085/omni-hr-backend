@@ -13,3 +13,19 @@ def test_settings_and_model_attributes():
     assert hasattr(PasswordResetToken, "expires_at")
     assert "PASSWORD_RESET_REQUESTED" in AuditAction.__members__
     assert "PASSWORD_RESET_COMPLETED" in AuditAction.__members__
+
+
+@pytest.mark.asyncio
+async def test_email_service_console_fallback(capsys):
+    from app.core.services.email_service import EmailService
+
+    service = EmailService()
+    await service.send_password_reset_email(
+        to_email="test@company.com",
+        recipient_name="John Doe",
+        reset_url="http://localhost:3000/reset-password?token=mocktoken123",
+    )
+    captured = capsys.readouterr()
+    assert "test@company.com" in captured.out
+    assert "http://localhost:3000/reset-password?token=mocktoken123" in captured.out
+
