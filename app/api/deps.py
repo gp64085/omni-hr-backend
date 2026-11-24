@@ -8,6 +8,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.services.cache_service import CacheService
+from app.core.services.email_service import EmailService
 from app.core.services.idempotency_service import (
     check_idempotency,
     idempotency_service,
@@ -91,13 +92,19 @@ def get_audit_repository(
     return AuditLogRepository(database_session)
 
 
+def get_email_service() -> EmailService:
+    return EmailService()
+
+
 def get_auth_service(
     user_repository: UserRepository = Depends(get_user_repository),
     audit_repository: AuditLogRepository = Depends(get_audit_repository),
+    email_service: EmailService = Depends(get_email_service),
 ) -> AuthService:
     return AuthService(
         user_repository=user_repository,
         audit_repository=audit_repository,
+        email_service=email_service,
     )
 
 

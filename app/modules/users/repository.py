@@ -1,11 +1,17 @@
 import uuid
 from typing import Optional, Sequence
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.user import EmployeeProfile, RefreshToken, User, UserRole
+from app.models.user import (
+    EmployeeProfile,
+    PasswordResetToken,
+    RefreshToken,
+    User,
+    UserRole,
+)
 from app.repositories.base import BaseRepository
 
 
@@ -36,6 +42,20 @@ class UserRepository(BaseRepository[User]):
                 selectinload(User.role),
             )
             .where(User.id == user_id)
+        )
+        return query_result.scalar_one_or_none()
+
+    async def get_for_update(self, user_id: uuid.UUID) -> Optional[User]:
+        query_result = await self._database_session.execute(
+            select(User)
+            .options(
+                selectinload(User.department),
+                selectinload(User.designation),
+                selectinload(User.profile),
+                selectinload(User.role),
+            )
+            .where(User.id == user_id)
+            .with_for_update()
         )
         return query_result.scalar_one_or_none()
 
@@ -101,6 +121,45 @@ class UserRepository(BaseRepository[User]):
         self._database_session.add(refresh_token_entity)
         await self._database_session.flush()
         return refresh_token_entity
+
+    async def revoke_all_refresh_tokens(self, user_id: uuid.UUID) -> None:
+        await self._database_session.execute(
+            update(RefreshToken)
+            .where(
+                RefreshToken.user_id == user_id,
+                RefreshToken.is_revoked.is_(False),
+            )
+            .values(is_revoked=True)
+        )
+        await self._database_session.flush()
+
+    async def create_password_reset_token(
+        self, reset_token: PasswordResetToken
+    ) -> PasswordResetToken:
+        self._database_session.add(reset_token)
+        await self._database_session.flush()
+        return reset_token
+
+    async def get_password_reset_token(
+        self, token_hash: str
+    ) -> Optional[PasswordResetToken]:
+        query_result = await self._database_session.execute(
+            select(PasswordResetToken).where(
+                PasswordResetToken.token_hash == token_hash
+            )
+        )
+        return query_result.scalar_one_or_none()
+
+    async def invalidate_user_reset_tokens(self, user_id: uuid.UUID) -> None:
+        await self._database_session.execute(
+            update(PasswordResetToken)
+            .where(
+                PasswordResetToken.user_id == user_id,
+                PasswordResetToken.is_used.is_(False),
+            )
+            .values(is_used=True)
+        )
+        await self._database_session.flush()
 
     async def get_profile(self, user_id: uuid.UUID) -> Optional[EmployeeProfile]:
         query_result = await self._database_session.execute(

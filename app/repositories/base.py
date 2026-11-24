@@ -16,6 +16,10 @@ class BaseRepository(Generic[ModelType]):
         self.model_class = model_class
         self._database_session = database_session
 
+    @property
+    def session(self) -> AsyncSession:
+        return self._database_session
+
     async def get_by_id(self, entity_id: uuid.UUID) -> Optional[ModelType]:
         result = await self._database_session.execute(
             select(self.model_class).where(self.model_class.id == entity_id)  # type: ignore

@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -13,6 +13,24 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 1 day for dev, 15-60 min for prod
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
+    # Environment & Transport Guards
+    ENVIRONMENT: str = "development"
+    EMAIL_TRANSPORT: str = "smtp"  # "smtp", "console", "none"
+
+    # Frontend & Password Reset
+    FRONTEND_URL: str = "http://localhost:3000"
+    PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 15
+    PASSWORD_RESET_MIN_DURATION_SECONDS: float = 0.15
+
+    # SMTP & Email Settings
+    SMTP_HOST: Optional[str] = None
+    SMTP_PORT: int = 587
+    SMTP_USER: Optional[str] = None
+    SMTP_PASSWORD: Optional[str] = None
+    SMTP_TLS: bool = True
+    EMAILS_FROM_EMAIL: str = "noreply@omnihr.internal"
+    EMAILS_FROM_NAME: str = "OmniHR System"
 
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/omni_hr"

@@ -21,6 +21,12 @@ High-performance Enterprise HR Management System API built with **FastAPI**, **A
 
 ### 1. Authentication & RBAC (Role-Based Access Control)
 - **JWT Auth**: Login, Refresh token rotation, and Logout with token revocation.
+- **Password Reset Lifecycle**: Production-grade forgot-password and reset-password flow:
+  - Anti-enumeration timing-safe responses preventing account discovery.
+  - Cryptographically secure single-use tokens stored as SHA-256 hashes with configurable expiration (default 15 minutes).
+  - Out-of-band recovery tokens are never written to application logs or stdout.
+  - Preserves existing sessions during initial forgot-password request; revokes all active refresh tokens upon verified reset completion.
+  - Pluggable email delivery (`EMAIL_TRANSPORT="smtp"` or guarded `"console"` for development). Console delivery is rejected in production environments and omits usable tokens from application output.
 - **Dynamic System & Custom Roles**: Create custom roles with granular permission codes.
 - **Permission Guards**: Declarative role and granular permission enforcement across protected endpoints.
 
@@ -63,11 +69,13 @@ backend/
 │   │   ├── scheduler.py         # Midnight background accrual cron loop
 │   │   ├── security.py          # JWT generation, token verification & password hashing
 │   │   └── services/
-│   │       └── cache_service.py # Redis route caching decorator & prefix invalidation
+│   │       ├── cache_service.py # Redis route caching decorator & prefix invalidation
+│   │       ├── email_service.py # SMTP & console fallback email delivery
+│   │       └── password_service.py # Argon2/Bcrypt password hashing & validation
 │   ├── db/
 │   │   └── session.py           # SQLAlchemy async engine & session factory
 │   ├── models/                  # Declarative SQLAlchemy domain models
-│   │   ├── user.py              # User & EmployeeProfile models
+│   │   ├── user.py              # User, EmployeeProfile, and PasswordResetToken models
 │   │   ├── role.py              # Role, Permission, RolePermission models
 │   │   ├── leave.py             # LeaveType, LeaveAllocation, LeaveRequest, LeaveAccrualPolicy
 │   │   └── holiday.py           # CompanyHoliday model
@@ -95,13 +103,29 @@ backend/
 
 ### 1. Environment Configuration
 
-Create a `.env` file in `backend/`:
+Copy the template from `.env.example` to `.env`:
+
+```bash
+cp .env.example .env
+```
+
+Key environment configurations available in `.env`:
 
 ```env
-PROJECT_NAME="OmniHR Enterprise API"
-SECRET_KEY="your-super-secret-jwt-key"
-DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/omnihr"
+PROJECT_NAME="OmniHR Enterprise HRMS"
+ENVIRONMENT="development"
+DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/omni_hr"
 REDIS_URL="redis://localhost:6379/0"
+JWT_SECRET="super-secret-omni-hr-key-change-in-production-32-bytes"
+JWT_REFRESH_SECRET="super-secret-refresh-key-change-in-production-32-bytes"
+FRONTEND_URL="http://localhost:3000"
+PASSWORD_RESET_TOKEN_EXPIRE_MINUTES=15
+EMAIL_TRANSPORT="console"       # "smtp" for production, "console" (dev-guarded) for local testing
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASSWORD=
+EMAILS_FROM_EMAIL="noreply@omnihr.internal"
 BACKEND_CORS_ORIGINS=["http://localhost:3000"]
 ```
 
