@@ -52,6 +52,13 @@ High-performance Enterprise HR Management System API built with **FastAPI**, **A
 - **Department-Based Filtering**: Retrieve active projects relevant to a specific department or accessible company-wide.
 - **Time Logging & Approval Workflow**: Track daily employee work hours, billable vs non-billable tasks, and manage approval workflows.
 
+### 6. Third-Party Integrations & Groq AI Assistant (OmniBot)
+- **Pluggable Messaging Architecture**: `BaseMessagingAdapter` abstracts messaging platforms with signature validation, replay attack protection (<300s drift), and rich layout mappings.
+- **Slack Conversational Integration**: Handles Direct Messages (DMs) for balance queries and notifications, and `@mentions` in channels for actionable tasks.
+- **Groq AI Tool-Calling Engine**: Powered by `llama-3.3-70b-versatile` for low-latency natural language understanding, querying leave quotas, and logging timesheets.
+- **2-Phase Confirmation Lifecycle**: Leave applications and mutations initiated in Slack present interactive Block Kit review cards with `[Confirm & Submit]` and `[Cancel]` buttons before final database insertion.
+- **Encrypted In-App Credential Management**: Slack bot tokens, signing secrets, and Groq API keys are configured via the web UI, encrypted at rest via AES/Fernet in PostgreSQL, and masked in all responses and logs.
+
 ---
 
 ## 📁 Repository Structure

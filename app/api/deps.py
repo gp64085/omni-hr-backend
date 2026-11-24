@@ -20,6 +20,8 @@ from app.models.user import User, UserRole
 from app.modules.audit.repository import AuditLogRepository
 from app.modules.audit.service import AuditLogService
 from app.modules.auth.service import AuthService
+from app.modules.integrations.repository import IntegrationRepository
+from app.modules.integrations.service import IntegrationService
 from app.modules.leaves.repository import LeaveRepository
 from app.modules.leaves.service import LeaveService
 from app.modules.notifications.repository import NotificationRepository
@@ -53,6 +55,8 @@ __all__ = [
     "get_project_service",
     "get_timesheet_service",
     "get_audit_service",
+    "get_integration_repository",
+    "get_integration_service",
     "get_current_user",
     "is_super_admin",
     "has_permission",
@@ -212,6 +216,18 @@ def get_audit_service(
     audit_repository: AuditLogRepository = Depends(get_audit_repository),
 ) -> AuditLogService:
     return AuditLogService(audit_repository=audit_repository)
+
+
+def get_integration_repository(
+    database_session: AsyncSession = Depends(get_db),
+) -> IntegrationRepository:
+    return IntegrationRepository(database_session)
+
+
+def get_integration_service(
+    integration_repository: IntegrationRepository = Depends(get_integration_repository),
+) -> IntegrationService:
+    return IntegrationService(integration_repository)
 
 
 @lru_cache
