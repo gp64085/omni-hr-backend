@@ -46,6 +46,8 @@
 *   `POST /api/v1/auth/login` - Authenticate with email/password & return JWT access + refresh tokens.
 *   `POST /api/v1/auth/refresh` - Rotate refresh token to obtain a new access token.
 *   `POST /api/v1/auth/logout` - Revoke current refresh token and invalidate session.
+*   `POST /api/v1/auth/forgot-password` - Request a password reset link. Anti-enumeration design returns generic 200 OK regardless of email existence. Dispatches reset link with 15-minute validity; preserves current active sessions.
+*   `POST /api/v1/auth/reset-password` - Complete password reset using token and new password (min 8 chars). Validates token expiry and single-use, updates password hash, marks token used, and revokes all active refresh tokens for the user.
 *   `GET /api/v1/users/me` - Fetch current user info, active `role`, and assigned `permissions`.
 *   `GET /api/v1/users/me/profile` - Fetch self-service profile details (phone, bank, emergency contacts).
 *   `PUT /api/v1/users/me/profile` - Update allowed self-service profile fields.
