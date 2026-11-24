@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 1 day for dev, 15-60 min for prod
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
+    # Environment & Transport Guards
+    ENVIRONMENT: str = "development"
+    EMAIL_TRANSPORT: str = "smtp"  # "smtp", "console", "none"
+
     # Frontend & Password Reset
     FRONTEND_URL: str = "http://localhost:3000"
     PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 15

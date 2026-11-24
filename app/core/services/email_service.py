@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 
 class EmailService:
     def __init__(self):
+        self._environment = settings.ENVIRONMENT.lower().strip()
+        self._email_transport = settings.EMAIL_TRANSPORT.lower().strip()
         self._smtp_host = settings.SMTP_HOST
         self._smtp_port = settings.SMTP_PORT
         self._smtp_user = settings.SMTP_USER
@@ -23,12 +25,27 @@ class EmailService:
     async def send_password_reset_email(
         self, to_email: str, recipient_name: str, reset_url: str
     ) -> None:
-        if self._smtp_host and self._smtp_user:
+        if self._email_transport == "smtp":
+            if not (self._smtp_host and self._smtp_user):
+                raise RuntimeError(
+                    "SMTP email transport is selected but SMTP_HOST or SMTP_USER is not configured. "
+                    "Incomplete SMTP configuration will not silently fall back to console transport."
+                )
             await anyio.to_thread.run_sync(
                 self._send_via_smtp, to_email, recipient_name, reset_url
             )
+        elif self._email_transport == "console":
+            self._deliver_console(to_email, recipient_name)
+        elif self._email_transport == "none":
+            logger.info(
+                "Email transport is 'none'; skipping password reset email to %s",
+                to_email,
+            )
         else:
-            self._log_console_email(to_email, recipient_name, reset_url)
+            raise ValueError(
+                f"Unsupported EMAIL_TRANSPORT: '{self._email_transport}'. "
+                "Must be one of: 'smtp', 'console', 'none'."
+            )
 
     def _send_via_smtp(
         self, to_email: str, recipient_name: str, reset_url: str
@@ -87,23 +104,30 @@ If you did not request a password reset, you can safely ignore this email.
                 if self._smtp_password:
                     server.login(self._smtp_user, self._smtp_password)
                 server.send_message(msg)
-                logger.info(f"Password reset email sent to {to_email} via SMTP")
+                logger.info("Password reset email sent to %s via SMTP", to_email)
         except Exception as e:
-            logger.error(f"Failed to send email via SMTP to {to_email}: {e}")
+            logger.error("Failed to send email via SMTP to %s: %s", to_email, e)
             raise
 
-    def _log_console_email(
-        self, to_email: str, recipient_name: str, reset_url: str
-    ) -> None:
+    def _deliver_console(self, to_email: str, recipient_name: str) -> None:
+        if self._environment in ("production", "prod"):
+            raise RuntimeError(
+                "Console email transport is strictly prohibited in production environments. "
+                "Configure a verified SMTP transport."
+            )
+
         box = f"""
 ================================================================================
-                           [MOCK EMAIL DISPATCH]
+                           [DEV EMAIL TRANSPORT]
 To: {to_email} ({recipient_name})
 From: {self._from_name} <{self._from_email}>
 Subject: Reset Your OmniHR Password
-Reset Link: {reset_url}
+Status: Password reset email dispatched (out-of-band recovery token omitted for security)
 Valid for: {settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES} minutes
 ================================================================================
 """
         print(box)
-        logger.info(f"[MOCK EMAIL] Password reset email for {to_email}: {reset_url}")
+        logger.info(
+            "Password reset notification sent to %s via development console transport",
+            to_email,
+        )

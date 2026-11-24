@@ -76,6 +76,8 @@ async def setup_test_db():
 
 
 def test_settings_and_model_attributes():
+    assert hasattr(settings, "ENVIRONMENT")
+    assert hasattr(settings, "EMAIL_TRANSPORT")
     assert hasattr(settings, "FRONTEND_URL")
     assert hasattr(settings, "PASSWORD_RESET_TOKEN_EXPIRE_MINUTES")
     assert hasattr(settings, "SMTP_HOST")
@@ -88,18 +90,60 @@ def test_settings_and_model_attributes():
 
 
 @pytest.mark.asyncio
-async def test_email_service_console_fallback(capsys):
+async def test_email_service_console_transport_omits_tokens(capsys):
     from app.core.services.email_service import EmailService
 
     service = EmailService()
+    service._email_transport = "console"
+    service._environment = "development"
+    raw_token = "mocktoken123_usable_secret"
+    reset_url = f"http://localhost:3000/reset-password?token={raw_token}"
+
     await service.send_password_reset_email(
         to_email="test@company.com",
         recipient_name="John Doe",
-        reset_url="http://localhost:3000/reset-password?token=mocktoken123",
+        reset_url=reset_url,
     )
     captured = capsys.readouterr()
     assert "test@company.com" in captured.out
-    assert "http://localhost:3000/reset-password?token=mocktoken123" in captured.out
+    # Security requirement: out-of-band recovery tokens must NOT appear in application output or logs
+    assert raw_token not in captured.out
+    assert reset_url not in captured.out
+    assert "out-of-band recovery token omitted for security" in captured.out
+
+
+@pytest.mark.asyncio
+async def test_email_service_smtp_missing_config_raises_error():
+    from app.core.services.email_service import EmailService
+
+    service = EmailService()
+    service._email_transport = "smtp"
+    service._smtp_host = None
+
+    with pytest.raises(RuntimeError, match="SMTP email transport is selected but"):
+        await service.send_password_reset_email(
+            to_email="test@company.com",
+            recipient_name="John Doe",
+            reset_url="http://localhost:3000/reset-password?token=secret",
+        )
+
+
+@pytest.mark.asyncio
+async def test_email_service_console_transport_rejected_in_production():
+    from app.core.services.email_service import EmailService
+
+    service = EmailService()
+    service._email_transport = "console"
+    service._environment = "production"
+
+    with pytest.raises(
+        RuntimeError, match="Console email transport is strictly prohibited"
+    ):
+        await service.send_password_reset_email(
+            to_email="test@company.com",
+            recipient_name="John Doe",
+            reset_url="http://localhost:3000/reset-password?token=secret",
+        )
 
 
 @pytest.mark.asyncio
