@@ -373,3 +373,33 @@ async def test_reset_password_short_password_rejected():
         )
         assert res.status_code == 422
 
+
+@pytest.mark.asyncio
+async def test_forgot_password_initiation_does_not_revoke_refresh_tokens():
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        # 1. Log in to get active refresh token
+        login_res = await ac.post(
+            "/api/v1/auth/login",
+            json={"email": "emp_recovery@omnihr.com", "password": "EmpPass123!"},
+        )
+        assert login_res.status_code == 200
+        active_refresh_token = login_res.json()["data"]["refresh_token"]
+
+        # 2. Merely initiate a forgot password request
+        forgot_res = await ac.post(
+            "/api/v1/auth/forgot-password",
+            json={"email": "emp_recovery@omnihr.com"},
+        )
+        assert forgot_res.status_code == 200
+
+        # 3. Existing active refresh token MUST NOT be revoked by initiation
+        refresh_res = await ac.post(
+            "/api/v1/auth/refresh",
+            json={"refresh_token": active_refresh_token},
+        )
+        assert refresh_res.status_code == 200
+        assert "access_token" in refresh_res.json()["data"]
+
+
