@@ -16,7 +16,7 @@ from app.models.organization import Department, Designation
 from app.models.payroll import PayRun, PayRunStatus, Payslip, SalaryStructure
 from app.models.role import Permission, Role, role_permissions
 from app.models.timesheet import Project, Timesheet, project_departments
-from app.models.user import EmployeeProfile, RefreshToken, User, UserRole
+from app.models.user import EmployeeProfile, PasswordResetToken, RefreshToken, User, UserRole
 
 __all__ = [
     "Department",
@@ -24,6 +24,7 @@ __all__ = [
     "User",
     "EmployeeProfile",
     "RefreshToken",
+    "PasswordResetToken",
     "UserRole",
     "Role",
     "Permission",
